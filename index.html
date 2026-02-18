@@ -779,6 +779,14 @@ class Ship {
         this.spawnTimer = 0;
         this.SPAWN_DELAY = 1200;
 
+        // Warp-in animation
+        this.warpAnim = 0;          // 0 → 1 over warpDuration ms
+        this.warpDuration = 700;
+
+        // Post-spawn hold before AI engages
+        this.holdTimer = 0;
+        this.HOLD_DURATION = 4000;
+
         // Takeoff effect
         this.takeoffTimer = 0;
         this.takeoffBlastEmitted = false;
@@ -811,6 +819,12 @@ class Ship {
             }
             return;
         }
+
+        // Warp-in progress
+        if(this.warpAnim < 1) this.warpAnim = Math.min(1, this.warpAnim + dt / this.warpDuration);
+
+        // Post-spawn hold
+        if(this.holdTimer < this.HOLD_DURATION) this.holdTimer += dt;
 
         // RESOURCE DRAIN
         let oxygenDrain = 0.0004; // base drain inside ship
@@ -1104,6 +1118,76 @@ if(this.state === "loading"){
     draw(){
         if(!this.spawned) return;
 
+        // ── Warp-in effect ──────────────────────────────────────────
+        if(this.warpAnim < 1){
+            const t = this.warpAnim;
+            // Ease out: starts fast, settles to normal
+            const ease = 1 - Math.pow(1 - t, 3);
+
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.rotation);
+
+            // Horizontal warp streak — wide & thin, collapses to ship
+            const streakW = (1 - ease) * 320 + 20;
+            const streakH = ease * 22 + (1 - ease) * 2;
+            const streakAlpha = (1 - ease) * 0.85;
+
+            // Outer soft streak
+            const sg = ctx.createLinearGradient(-streakW, 0, streakW, 0);
+            sg.addColorStop(0,   'rgba(100,200,255,0)');
+            sg.addColorStop(0.3, `rgba(140,220,255,${streakAlpha * 0.5})`);
+            sg.addColorStop(0.5, `rgba(220,240,255,${streakAlpha})`);
+            sg.addColorStop(0.7, `rgba(140,220,255,${streakAlpha * 0.5})`);
+            sg.addColorStop(1,   'rgba(100,200,255,0)');
+            ctx.fillStyle = sg;
+            ctx.fillRect(-streakW, -streakH / 2, streakW * 2, streakH);
+
+            // Bright core line
+            const cg = ctx.createLinearGradient(-streakW * 0.6, 0, streakW * 0.6, 0);
+            cg.addColorStop(0,   'rgba(255,255,255,0)');
+            cg.addColorStop(0.5, `rgba(255,255,255,${streakAlpha * 0.9})`);
+            cg.addColorStop(1,   'rgba(255,255,255,0)');
+            ctx.fillStyle = cg;
+            ctx.fillRect(-streakW * 0.6, -1, streakW * 1.2, 2);
+
+            // Flash burst at centre when warp is fresh
+            if(t < 0.25){
+                const flashAlpha = (0.25 - t) / 0.25;
+                const flashR = (1 - t) * 60 + 10;
+                const fg = ctx.createRadialGradient(0, 0, 0, 0, 0, flashR);
+                fg.addColorStop(0, `rgba(255,255,255,${flashAlpha * 0.9})`);
+                fg.addColorStop(0.4, `rgba(160,220,255,${flashAlpha * 0.5})`);
+                fg.addColorStop(1,   'rgba(100,180,255,0)');
+                ctx.fillStyle = fg;
+                ctx.beginPath();
+                ctx.arc(0, 0, flashR, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Speed lines radiating outward (only early in warp)
+            if(t < 0.55){
+                const lineAlpha = (0.55 - t) / 0.55;
+                ctx.strokeStyle = `rgba(180,230,255,${lineAlpha * 0.6})`;
+                ctx.lineWidth = 0.8;
+                const lineCount = 10;
+                for(let i = 0; i < lineCount; i++){
+                    const la = (i / lineCount) * Math.PI * 2;
+                    const inner = 12 + (1 - t) * 10;
+                    const outer = inner + (1 - t) * 80 * (0.4 + Math.random() * 0.6);
+                    ctx.beginPath();
+                    ctx.moveTo(Math.cos(la) * inner, Math.sin(la) * inner);
+                    ctx.lineTo(Math.cos(la) * outer, Math.sin(la) * outer);
+                    ctx.stroke();
+                }
+            }
+
+            ctx.restore();
+
+            // Fade ship in over the second half of warp
+            if(ease < 0.4) return;
+            ctx.globalAlpha = (ease - 0.4) / 0.6;
+        }
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.rotation);
@@ -1170,6 +1254,7 @@ if(this.state === "loading"){
         ctx.fillRect(-7, 14, 14, 8);
 
         ctx.restore();
+        ctx.globalAlpha = 1;
     }
 }
 
@@ -1351,6 +1436,7 @@ const astronaut = new Astronaut();
 // =============================
 function chooseNext(){
     if(!ship.spawned || ship.state !== "idle") return;
+    if(ship.holdTimer < ship.HOLD_DURATION) return;
 
     let best = null, bestScore = 0;
 
