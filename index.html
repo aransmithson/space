@@ -119,6 +119,55 @@ canvas { display:block; }
     cursor:pointer;
 }
 #gameover button:hover { background:rgba(0,170,255,0.1); }
+
+#debug-panel {
+    position:fixed;
+    bottom:20px;
+    left:20px;
+    width:340px;
+    max-height:260px;
+    background:rgba(0,0,0,0.82);
+    border:1px solid #1a3a1a;
+    border-radius:4px;
+    z-index:20;
+    display:flex;
+    flex-direction:column;
+    font-family:'Share Tech Mono', monospace;
+    font-size:9px;
+    pointer-events:auto;
+}
+#debug-header {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:5px 8px;
+    border-bottom:1px solid #1a3a1a;
+    background:rgba(0,40,0,0.6);
+    cursor:pointer;
+    user-select:none;
+    letter-spacing:2px;
+    color:#3f3;
+    font-size:9px;
+}
+#debug-header span { color:#1a5c1a; }
+#debug-log {
+    overflow-y:auto;
+    flex:1;
+    padding:6px 8px;
+    line-height:1.6;
+}
+#debug-log::-webkit-scrollbar { width:4px; }
+#debug-log::-webkit-scrollbar-track { background:transparent; }
+#debug-log::-webkit-scrollbar-thumb { background:#1a4a1a; border-radius:2px; }
+.dl { color:#2a2a2a; }
+.dl.info  { color:#3a7a3a; }
+.dl.warn  { color:#aaaa00; }
+.dl.crit  { color:#ff4444; }
+.dl.state { color:#00aaff; }
+.dl.score { color:#448844; }
+.dl.skip  { color:#555; }
+.dl.good  { color:#44ff44; }
+#debug-panel.collapsed #debug-log { display:none; }
 </style>
 </head>
 <body>
@@ -142,6 +191,10 @@ canvas { display:block; }
         <div class="res-label"><span>FUEL</span><span id="val-fuel">100</span></div>
         <div class="res-track"><div class="res-fill" id="bar-fuel" style="background:#ffaa00;width:100%"></div></div>
     </div>
+    <div class="res-row" id="row-integrity">
+        <div class="res-label"><span>INTEGRITY</span><span id="val-integrity">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-integrity" style="background:#cc44ff;width:100%"></div></div>
+    </div>
     <div class="status-row">STATE: <span class="status-val" id="state-label">STANDBY</span></div>
     <div class="status-row">TARGET: <span class="status-val" id="target-label">—</span></div>
     <div style="margin-top:12px; pointer-events:auto;">
@@ -164,6 +217,13 @@ canvas { display:block; }
 
 <div id="zoom-hint">SCROLL TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
 
+<div id="debug-panel">
+    <div id="debug-header" onclick="toggleDebug()">
+        ◈ AI DEBUG LOG <span id="debug-count">[0]</span>
+    </div>
+    <div id="debug-log"></div>
+</div>
+
 <div id="gameover">
     <h1>Mission Failed</h1>
     <p id="gameover-reason">Critical resource depleted</p>
@@ -175,10 +235,56 @@ const canvas = document.getElementById("sim");
 const ctx = canvas.getContext("2d");
 
 // =============================
+// DEBUG LOG
+// =============================
+const MAX_LOG = 200;
+let debugLines = [];
+let debugCount = 0;
+let debugCollapsed = false;
+
+function toggleDebug(){
+    debugCollapsed = !debugCollapsed;
+    document.getElementById("debug-panel").classList.toggle("collapsed", debugCollapsed);
+}
+
+function dbg(msg, type="info"){
+    const now = (performance.now() / 1000).toFixed(1);
+    debugLines.push({ msg:`[${now}s] ${msg}`, type });
+    if(debugLines.length > MAX_LOG) debugLines.shift();
+    debugCount++;
+    renderDebug();
+}
+
+function renderDebug(){
+    const log = document.getElementById("debug-log");
+    document.getElementById("debug-count").textContent = `[${debugCount}]`;
+    log.innerHTML = debugLines.map(l =>
+        `<div class="dl ${l.type}">${l.msg}</div>`
+    ).join("");
+    log.scrollTop = log.scrollHeight;
+}
+
+// Throttle: only log chooseNext details every N ms to avoid spam
+let lastChooseLog = 0;
+const CHOOSE_LOG_INTERVAL = 2000;
+let lastOxyWarn = 0;
+
+// =============================
 // CAMERA
 // =============================
+const SOLAR_SCALE = 2.5; // multiplier applied to all orbit radii
+
+function overviewZoom(){
+    // Zoom level that fits the outermost orbit (factor 0.96) with a 10% margin
+    const outerR = Math.min(canvas.width, canvas.height) / 2 * 0.96 * SOLAR_SCALE;
+    return (Math.min(canvas.width, canvas.height) / 2 / outerR) * 0.88;
+}
+
+const FOLLOW_ZOOM = 3.0;
+
 const camera = { 
-    zoom: 1, 
+    zoom: 1,
+    targetZoom: 1,
     panX: 0, 
     panY: 0,
     follow: false
@@ -187,12 +293,15 @@ const camera = {
 
 canvas.addEventListener("wheel", e => {
     e.preventDefault();
+    if(camera.follow) return;
     const f = e.deltaY < 0 ? 1.12 : 0.89;
     const mx = e.clientX - canvas.width / 2;
     const my = e.clientY - canvas.height / 2;
     camera.panX = camera.panX * f + mx * (1 - f);
     camera.panY = camera.panY * f + my * (1 - f);
-    camera.zoom = Math.max(0.2, Math.min(14, camera.zoom * f));
+    const newZoom = Math.max(0.1, Math.min(14, camera.zoom * f));
+    camera.zoom = newZoom;
+    camera.targetZoom = newZoom;
 }, { passive: false });
 
 let dragging = false, dragStart = {x:0,y:0}, panStart = {x:0,y:0};
@@ -222,6 +331,9 @@ followBtn.addEventListener("click", () => {
         "Follow Camera: " + (camera.follow ? "ON" : "OFF");
 
     if(camera.follow){
+        camera.targetZoom = FOLLOW_ZOOM;
+    } else {
+        camera.targetZoom = overviewZoom();
         camera.panX = 0;
         camera.panY = 0;
     }
@@ -234,7 +346,7 @@ followBtn.addEventListener("click", () => {
 let stars = [];
 function buildStars(){
     stars = [];
-    for(let i = 0; i < 350; i++){
+    for(let i = 0; i < 550; i++){
         stars.push({
             x: Math.random() * canvas.width,
             y: Math.random() * canvas.height,
@@ -248,9 +360,17 @@ function resize(){
     canvas.width  = window.innerWidth;
     canvas.height = window.innerHeight;
     buildStars();
+    // Reset to overview zoom whenever window resizes
+    if(!camera.follow){
+        camera.zoom = overviewZoom();
+        camera.targetZoom = camera.zoom;
+    }
 }
 window.addEventListener("resize", resize);
 resize();
+// Set initial overview zoom after first resize
+camera.zoom = overviewZoom();
+camera.targetZoom = camera.zoom;
 
 function center(){ return { x: canvas.width/2, y: canvas.height/2 }; }
 
@@ -298,6 +418,17 @@ function drawSun(t){
     const c = center();
     const pulse = 1 + 0.02 * Math.sin(t / 600);
 
+    // Danger zone ring — pulsing red warning
+    const dangerRadius = ship.SUN_DANGER_RADIUS || 90;
+    const dangerPulse = 0.3 + 0.15 * Math.sin(t / 400);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, dangerRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,60,20,${dangerPulse})`;
+    ctx.lineWidth = 1.5 / camera.zoom;
+    ctx.setLineDash([4 / camera.zoom, 6 / camera.zoom]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
     for(let i = 3; i > 0; i--){
         const grad = ctx.createRadialGradient(c.x, c.y, 24, c.x, c.y, 40*i*pulse);
         grad.addColorStop(0, 'rgba(255,200,50,0.15)');
@@ -340,7 +471,7 @@ class Planet {
     }
 
     orbitRadius(){
-        return Math.min(canvas.width, canvas.height) / 2 * this.orbitFactor;
+        return Math.min(canvas.width, canvas.height) / 2 * this.orbitFactor * SOLAR_SCALE;
     }
 
     update(dt){ this.angle += this.speed * dt; }
@@ -393,10 +524,11 @@ class Planet {
 }
 
 const planets = [
-    new Planet("Oxygen", 0.28, 14, "#00aaff", "oxygen", "#00aaff"),
-    new Planet("Food",   0.46, 15, "#44cc66", "food",   "#44cc66"),
-    new Planet("Water",  0.67, 13, "#2255dd", "water",  "#2255dd"),
-    new Planet("Fuel",   0.90, 17, "#dd8800", "fuel",   "#dd8800"),
+    new Planet("Oxygen", 0.22, 14, "#00aaff", "oxygen", "#00aaff"),
+    new Planet("Food",   0.40, 15, "#44cc66", "food",   "#44cc66"),
+    new Planet("Water",  0.58, 13, "#2255dd", "water",  "#2255dd"),
+    new Planet("Fuel",   0.76, 17, "#dd8800", "fuel",   "#dd8800"),
+    new Planet("Repair", 0.96, 16, "#aa44ff", "repair", "#aa44ff"),
 ];
 
 // =============================
@@ -771,6 +903,8 @@ class Ship {
             food:   randRange(50, 100),
             fuel:   randRange(50, 100)
         };
+        this.integrity = 100;
+        this.SUN_DANGER_RADIUS = 90; // world-space radius around sun center
         this.evaRefillRate = 0;
         this.evaResource = null;
 
@@ -804,9 +938,13 @@ class Ship {
     }
 
     _pickWander(){
-        const pad = 280;
-        this.wanderX = pad + Math.random() * (canvas.width  - pad*2);
-        this.wanderY = pad + Math.random() * (canvas.height - pad*2);
+        // Wander within inner system (roughly between innermost and mid orbits)
+        const c = center();
+        const wanderRadius = Math.min(canvas.width, canvas.height) / 2 * 0.35 * SOLAR_SCALE;
+        const angle = Math.random() * Math.PI * 2;
+        const dist  = wanderRadius * (0.3 + Math.random() * 0.7);
+        this.wanderX = c.x + Math.cos(angle) * dist;
+        this.wanderY = c.y + Math.sin(angle) * dist;
     }
 
     update(dt){
@@ -848,6 +986,16 @@ class Ship {
         for(let r in this.resources)
             this.resources[r] = Math.max(0, this.resources[r]);
 
+        // SUN PROXIMITY — integrity damage when flying too close
+        if(this.state !== "landed" && this.state !== "eva" && this.state !== "loading"){
+            const c = center();
+            const sunDist = Math.hypot(this.x - c.x, this.y - c.y);
+            if(sunDist < this.SUN_DANGER_RADIUS){
+                const intensity = 1 - sunDist / this.SUN_DANGER_RADIUS;
+                this.integrity = Math.max(0, this.integrity - 0.008 * intensity * dt);
+            }
+        }
+
         // TRANSFER — slow thrust, always tracking moving target
         if(this.state === "transfer"){
             const tp = this.target.position();
@@ -858,7 +1006,12 @@ class Ship {
 
             const maxSpeed = 1.4;
             const arriveRadius = 120;
-            let desiredSpeed = dist < arriveRadius ? maxSpeed * (dist / arriveRadius) : maxSpeed;
+            // Use surface distance (not center distance) so the ship doesn't
+            // slow below the planet's orbital speed and get stuck chasing it
+            const surfaceDist = Math.max(0, dist - this.target.size);
+            let desiredSpeed = surfaceDist < arriveRadius ? maxSpeed * (surfaceDist / arriveRadius) : maxSpeed;
+            // Minimum speed guarantees we always overtake the moving planet
+            desiredSpeed = Math.max(desiredSpeed, 0.55);
 
             const desiredVX = Math.cos(angle) * desiredSpeed;
             const desiredVY = Math.sin(angle) * desiredSpeed;
@@ -872,7 +1025,7 @@ class Ship {
                 trail.emit(this.x, this.y, this.vx, this.vy, "#88ccff");
             }
 
-            if(dist <= this.target.size + 6){
+            if(dist <= this.target.size + 8){
                 this.land();
             }
         }
@@ -896,15 +1049,21 @@ if(this.state === "loading"){
     if(this.loadingResource){
         const type = this.loadingResource;
 
-        // Gradual refill
-        this.resources[type] = Math.min(
-            100,
-            this.resources[type] + 0.05 * dt
-        );
+        if(type === "repair"){
+            // Restore integrity instead of a resource
+            this.integrity = Math.min(100, this.integrity + 0.06 * dt);
+        } else {
+            // Gradual refill
+            this.resources[type] = Math.min(
+                100,
+                this.resources[type] + 0.05 * dt
+            );
+        }
     }
 
     if(progress >= 1){
         this.loadingResource = null;
+        dbg(`⬆ LOADING complete → TAKEOFF (O2=${this.resources.oxygen.toFixed(0)} FUEL=${this.resources.fuel.toFixed(0)})`, "state");
         this.state = "takeoff";
     }
 
@@ -921,6 +1080,8 @@ if(this.state === "loading"){
             if(!this.takeoffBlastEmitted){
                 this.takeoffBlastEmitted = true;
                 emitTakeoffBlast(this.landedPlanet, this.surfaceAngle);
+                // Structural stress from launch
+                this.integrity = Math.max(0, this.integrity - (2 + Math.random() * 4));
             }
 
             // Continuous exhaust during takeoff
@@ -948,6 +1109,7 @@ if(this.state === "loading"){
             trail.emit(this.x, this.y, this.vx, this.vy, "#ffaa44");
 
             if(this.distanceTo(this.landedPlanet.position()) > this.landedPlanet.size + 120){
+                dbg(`🔄 TAKEOFF complete → IDLE (O2=${this.resources.oxygen.toFixed(0)})`, "state");
                 this.state = "idle";
                 this.landedPlanet = null;
                 this.target = null;
@@ -1000,39 +1162,27 @@ if(this.state === "loading"){
             }
         }
 
-        // SCREEN BOUNDS repulsion (idle only)
-        if(this.state === "idle"){
-            const repulseZone = 260;
-            const repulseStr  = 0.018;
-            const left   = this.x;
-            const right  = canvas.width  - this.x;
-            const top    = this.y;
-            const bottom = canvas.height - this.y;
-            if(left   < repulseZone) this.vx += repulseStr * dt * Math.pow(1 - left   / repulseZone, 3);
-            if(right  < repulseZone) this.vx -= repulseStr * dt * Math.pow(1 - right  / repulseZone, 3);
-            if(top    < repulseZone) this.vy += repulseStr * dt * Math.pow(1 - top    / repulseZone, 3);
-            if(bottom < repulseZone) this.vy -= repulseStr * dt * Math.pow(1 - bottom / repulseZone, 3);
-        }
-
         // Global speed cap
         const maxSpd = 1.4;
         const spd = Math.hypot(this.vx, this.vy);
         if(spd > maxSpd){ this.vx *= maxSpd/spd; this.vy *= maxSpd/spd; }
 
-        // Hard clamp
-        const margin = 10;
-        this.x = Math.max(margin, Math.min(canvas.width  - margin, this.x));
-        this.y = Math.max(margin, Math.min(canvas.height - margin, this.y));
-
-        const wpad = 260 + 20;
-        this.wanderX = Math.max(wpad, Math.min(canvas.width  - wpad, this.wanderX));
-        this.wanderY = Math.max(wpad, Math.min(canvas.height - wpad, this.wanderY));
+        // Keep wander target within the inner system world bounds
+        const c2 = center();
+        const maxWander = Math.min(canvas.width, canvas.height) / 2 * 0.38 * SOLAR_SCALE;
+        const wx = this.wanderX - c2.x, wy = this.wanderY - c2.y;
+        if(Math.hypot(wx, wy) > maxWander){
+            const wa = Math.atan2(wy, wx);
+            this.wanderX = c2.x + Math.cos(wa) * maxWander;
+            this.wanderY = c2.y + Math.sin(wa) * maxWander;
+        }
 
         this.updateHUD();
     }
 
     land(){
         this.state = "landed";
+        dbg(`✈ LANDED on ${this.target.name.toUpperCase()} (resource: ${this.target.resource})`, "state");
         this.landedPlanet = this.target;
 
         const pp = this.landedPlanet.position();
@@ -1045,9 +1195,20 @@ if(this.state === "loading"){
         // Landing dust plume!
         emitLandingDust(this.landedPlanet, this.surfaceAngle);
 
+        // Impact stress — repair planet is a soft dock, others are harder landings
+        const impactDmg = this.landedPlanet.resource === "repair"
+            ? 1 + Math.random() * 2
+            : 3 + Math.random() * 6;
+        this.integrity = Math.max(0, this.integrity - impactDmg);
+
         this.evaResource = this.landedPlanet.resource;
-        const deficit = 100 - this.resources[this.evaResource];
-        this.evaRefillRate = deficit / 2000;
+        if(this.evaResource === "repair"){
+            // Repair planet restores integrity, not a normal resource
+            this.evaRefillRate = 0;
+        } else {
+            const deficit = 100 - this.resources[this.evaResource];
+            this.evaRefillRate = deficit / 2000;
+        }
 
         // Spawn a package on the planet
         pkg.spawn(this.landedPlanet, this.surfaceAngle);
@@ -1081,6 +1242,17 @@ if(this.state === "loading"){
             triggerGameOver(key);
     }
 
+    // INTEGRITY BAR
+    const intVal = Math.round(this.integrity);
+    const intBar   = document.getElementById('bar-integrity');
+    const intValEl = document.getElementById('val-integrity');
+    const intRowEl = document.getElementById('row-integrity');
+    if(intBar)   intBar.style.width = intVal + '%';
+    if(intValEl) intValEl.textContent = intVal;
+    if(intRowEl) intRowEl.classList.toggle('critical', intVal < 20);
+    if(intVal <= 0 && this.spawned && !gameOver)
+        triggerGameOver('integrity');
+
 
     // =============================
     // STATE LABEL
@@ -1097,10 +1269,13 @@ if(this.state === "loading"){
                 100,
                 Math.floor((this.loadingTimer / this.loadingDuration) * 100)
             );
-            const resName = this.loadingResource
-                ? this.loadingResource.toUpperCase()
-                : "CARGO";
-            stateEl.textContent = "LOADING " + resName + " " + pct + "%";
+            const resName = this.loadingResource === "repair"
+                ? "HULL"
+                : this.loadingResource
+                    ? this.loadingResource.toUpperCase()
+                    : "CARGO";
+            const verb = this.loadingResource === "repair" ? "REPAIRING " : "LOADING ";
+            stateEl.textContent = verb + resName + " " + pct + "%";
         }
         else{
             stateEl.textContent = this.state.toUpperCase();
@@ -1435,40 +1610,95 @@ const astronaut = new Astronaut();
 // AI
 // =============================
 function chooseNext(){
-    if(!ship.spawned || ship.state !== "idle") return;
-    if(ship.holdTimer < ship.HOLD_DURATION) return;
+    const now = performance.now();
+    const shouldLog = (now - lastChooseLog) > CHOOSE_LOG_INTERVAL;
+
+    if(!ship.spawned){
+        if(shouldLog){ dbg('chooseNext: ship not spawned yet', 'skip'); lastChooseLog = now; }
+        return;
+    }
+    if(ship.state !== "idle"){
+        if(shouldLog){ dbg(`chooseNext: skipped — state=${ship.state}`, 'skip'); lastChooseLog = now; }
+        return;
+    }
+    if(ship.holdTimer < ship.HOLD_DURATION){
+        if(shouldLog){ dbg(`chooseNext: hold timer ${(ship.holdTimer/1000).toFixed(1)}s / ${(ship.HOLD_DURATION/1000).toFixed(1)}s`, 'skip'); lastChooseLog = now; }
+        return;
+    }
+
+    const c = center();
+    const SUN_SAFE_RADIUS = 160;
 
     let best = null, bestScore = 0;
 
+    if(shouldLog) dbg(`── AI eval  O2=${ship.resources.oxygen.toFixed(0)} H2O=${ship.resources.water.toFixed(0)} FOOD=${ship.resources.food.toFixed(0)} FUEL=${ship.resources.fuel.toFixed(0)} INT=${ship.integrity.toFixed(0)}`, 'info');
+
     for(let p of planets){
+        const pp = p.position();
+        const distToSun = Math.hypot(pp.x - c.x, pp.y - c.y);
+
+        if(distToSun < SUN_SAFE_RADIUS){
+            if(shouldLog) dbg(`  SKIP ${p.name}: too close to sun (${distToSun.toFixed(0)} < ${SUN_SAFE_RADIUS})`, 'skip');
+            continue;
+        }
+
+        if(p.resource === "repair"){
+            if(ship.integrity < 20){
+                if(shouldLog) dbg(`  EMERGENCY → Repair (integrity ${ship.integrity.toFixed(0)} < 20)`, 'crit');
+                best = p; break;
+            }
+            const intNeed = 100 - ship.integrity;
+            if(intNeed <= 0){
+                if(shouldLog) dbg(`  SKIP Repair: integrity full`, 'skip');
+                continue;
+            }
+            const dist = ship.distanceTo(pp);
+            const distPenalty = Math.max(0.3, 1 - dist / 1500);
+            const score = intNeed * 3.5 * distPenalty;
+            if(shouldLog) dbg(`  Repair: need=${intNeed.toFixed(0)} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
+            if(score > bestScore){ bestScore = score; best = p; }
+            continue;
+        }
+
         const need = 100 - ship.resources[p.resource];
 
         if(p.resource === "oxygen" && ship.resources.oxygen < 15){
+            if(shouldLog) dbg(`  EMERGENCY → Oxygen (O2=${ship.resources.oxygen.toFixed(0)} < 15)`, 'crit');
             best = p; break;
         }
 
         let weight = 1;
-        if(p.resource === "oxygen") weight = 3;
+        if(p.resource === "oxygen") weight = 1;
         if(p.resource === "fuel")   weight = 2.5;
         if(p.resource === "water")  weight = 2;
 
-        const dist = ship.distanceTo(p.position());
+        const dist = ship.distanceTo(pp);
         const distPenalty = Math.max(0.3, 1 - dist / 1500);
         const score = need * weight * distPenalty;
+        if(shouldLog) dbg(`  ${p.name}: need=${need.toFixed(0)} w=${weight} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
         if(score > bestScore){ bestScore = score; best = p; }
     }
 
-    if(best && (bestScore > 15 || (best.resource === "oxygen" && ship.resources.oxygen < 15))){
+    if(best && (bestScore > 15 || (best.resource === "oxygen" && ship.resources.oxygen < 15) || (best.resource === "repair" && ship.integrity < 20))){
+        dbg(`▶ DECISION: GO TO ${best.name.toUpperCase()} (score=${bestScore.toFixed(1)})`, 'good');
         ship.target = best;
         ship.state = "transfer";
+    } else if(shouldLog){
+        if(best){
+            dbg(`  No target chosen — bestScore=${bestScore.toFixed(1)} < 15 threshold`, 'warn');
+        } else {
+            dbg(`  No valid target found at all`, 'warn');
+        }
     }
+
+    if(shouldLog) lastChooseLog = now;
 }
 
 // =============================
 // GAME OVER
 // =============================
 let gameOver = false;
-const RESOURCE_NAMES = { oxygen:'OXYGEN', water:'WATER', food:'FOOD', fuel:'FUEL' };
+const RESOURCE_NAMES = { oxygen:'OXYGEN', water:'WATER', food:'FOOD', fuel:'FUEL', integrity:'HULL INTEGRITY' };
 
 function triggerGameOver(resource){
     gameOver = true;
@@ -1491,11 +1721,17 @@ function loop(t){
     // Stars — screen-fixed, no camera transform
     drawStars(t);
 
+    // Smooth zoom toward target
+    camera.zoom += (camera.targetZoom - camera.zoom) * Math.min(1, 0.06 * dt / 16);
+
     // World — apply camera
     if(camera.follow && ship.spawned){
-    camera.panX = canvas.width / 2 - ship.x * camera.zoom;
-    camera.panY = canvas.height / 2 - ship.y * camera.zoom;
-}
+        const targetPanX = (canvas.width  / 2 - ship.x) * camera.zoom;
+        const targetPanY = (canvas.height / 2 - ship.y) * camera.zoom;
+        const lerpSpeed = Math.min(1, 0.08 * dt / 16);
+        camera.panX += (targetPanX - camera.panX) * lerpSpeed;
+        camera.panY += (targetPanY - camera.panY) * lerpSpeed;
+    }
 
     ctx.save();
     applyCamera();
@@ -1517,6 +1753,17 @@ function loop(t){
     astronaut.update(dt);
     pkg.update(dt);
     chooseNext();
+
+    // Oxygen warning monitor
+    if(ship.spawned && !gameOver){
+        const oxy = ship.resources.oxygen;
+        const now2 = performance.now();
+        if(oxy < 30 && (now2 - lastOxyWarn) > 3000){
+            lastOxyWarn = now2;
+            const lvl = oxy < 10 ? 'crit' : oxy < 20 ? 'warn' : 'info';
+            dbg(`⚠ O2 WARNING: ${oxy.toFixed(0)}% — state=${ship.state}${ship.target ? ' target='+ship.target.name : ''}`, lvl);
+        }
+    }
 
     // Draw package before ship/astronaut so it's behind them
     pkg.draw(t);
