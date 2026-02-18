@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Orbital Surface Simulation</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+body { margin:0; overflow:hidden; background:#000; font-family:'Share Tech Mono', monospace; cursor:crosshair; }
+canvas { display:block; }
+
+#hud {
+    position:fixed;
+    top:20px;
+    left:20px;
+    width:220px;
+    pointer-events:none;
+    z-index:10;
+}
+#hud h2 {
+    font-family:'Orbitron', sans-serif;
+    font-size:10px;
+    letter-spacing:4px;
+    color:#aaa;
+    margin:0 0 12px 0;
+    text-transform:uppercase;
+}
+.res-row { margin-bottom:10px; }
+.res-label {
+    font-size:10px;
+    letter-spacing:2px;
+    color:#888;
+    display:flex;
+    justify-content:space-between;
+    margin-bottom:3px;
+}
+.res-label span:last-child { color:#ccc; }
+.res-track {
+    width:100%;
+    height:6px;
+    background:rgba(255,255,255,0.07);
+    border-radius:3px;
+    overflow:hidden;
+    position:relative;
+}
+.res-fill {
+    height:100%;
+    border-radius:3px;
+    transition:width 0.3s ease;
+    position:relative;
+}
+.res-fill::after {
+    content:'';
+    position:absolute;
+    right:0; top:0; bottom:0;
+    width:3px;
+    background:rgba(255,255,255,0.6);
+    border-radius:3px;
+}
+.critical .res-fill { animation: pulse-bar 0.5s ease-in-out infinite alternate; }
+@keyframes pulse-bar {
+    from { opacity:1; }
+    to { opacity:0.4; }
+}
+#status {
+    margin-top:8px;
+    font-size:9px;
+    letter-spacing:2px;
+    color:#555;
+    text-transform:uppercase;
+}
+#status .status-val { color:#0af; }
+#zoom-hint {
+    position:fixed;
+    bottom:20px;
+    right:20px;
+    font-size:9px;
+    letter-spacing:2px;
+    color:#2a2a2a;
+    pointer-events:none;
+    z-index:10;
+}
+</style>
+</head>
+<body>
+<canvas id="sim"></canvas>
+
+<div id="hud">
+    <h2>Ship Status</h2>
+    <div class="res-row" id="row-oxygen">
+        <div class="res-label"><span>OXYGEN</span><span id="val-oxygen">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-oxygen" style="background:#00bbff;width:100%"></div></div>
+    </div>
+    <div class="res-row" id="row-water">
+        <div class="res-label"><span>WATER</span><span id="val-water">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-water" style="background:#3366ff;width:100%"></div></div>
+    </div>
+    <div class="res-row" id="row-food">
+        <div class="res-label"><span>FOOD</span><span id="val-food">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-food" style="background:#44dd77;width:100%"></div></div>
+    </div>
+    <div class="res-row" id="row-fuel">
+        <div class="res-label"><span>FUEL</span><span id="val-fuel">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-fuel" style="background:#ffaa00;width:100%"></div></div>
+    </div>
+    <div id="status">STATE: <span class="status-val" id="state-label">STANDBY</span></div>
+    <div id="status">TARGET: <span class="status-val" id="target-label">—</span></div>
+</div>
+
+<div id="zoom-hint">SCROLL TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
+
+<script>
+const canvas = document.getElementById("sim");
+const ctx = canvas.getContext("2d");
+
+// =============================
+// CAMERA
+// =============================
+const camera = { zoom: 1, panX: 0, panY: 0 };
+
+canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.12 : 0.89;
+    const mx = e.clientX - canvas.width / 2;
+    const my = e.clientY - canvas.height / 2;
+    // zoom toward cursor
+    camera.panX = camera.panX * f + mx * (1 - f);
+    camera.panY = camera.panY * f + my * (1 - f);
+    camera.zoom = Math.max(0.2, Math.min(14, camera.zoom * f));
+}, { passive: false });
+
+let dragging = false, dragStart = {x:0,y:0}, panStart = {x:0,y:0};
+canvas.addEventListener("mousedown", e => {
+    dragging = true;
+    dragStart = { x: e.clientX, y: e.clientY };
+    panStart  = { x: camera.panX, y: camera.panY };
+});
+canvas.addEventListener("mousemove", e => {
+    if(!dragging) return;
+    camera.panX = panStart.x + (e.clientX - dragStart.x);
+    camera.panY = panStart.y + (e.clientY - dragStart.y);
+});
+window.addEventListener("mouseup", () => dragging = false);
+
+function applyCamera(){
+    ctx.translate(canvas.width/2 + camera.panX, canvas.height/2 + camera.panY);
+    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(-canvas.width/2, -canvas.height/2);
+}
+
+// =============================
+// RESIZE + STARS
+// =============================
+let stars = [];
+function buildStars(){
+    stars = [];
+    for(let i = 0; i < 350; i++){
+        stars.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            r: Math.random() * 1.3 + 0.2,
+            a: Math.random() * 0.7 + 0.3,
+            tw: Math.random() * 3 + 1
+        });
+    }
+}
+function resize(){
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    buildStars();
+}
+window.addEventListener("resize", resize);
+resize();
+
+function center(){ return { x: canvas.width/2, y: canvas.height/2 }; }
+
+function drawStars(t){
+    for(let s of stars){
+        const twinkle = 0.6 + 0.4 * Math.sin(t / 1000 * s.tw);
+        ctx.globalAlpha = s.a * twinkle;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+}
+
+// =============================
+// COLOR UTILS
+// =============================
+function shiftColor(hex, amt){
+    let r, g, b;
+    const m = hex.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    if(m){ r=parseInt(m[1],16); g=parseInt(m[2],16); b=parseInt(m[3],16); }
+    else {
+        const tmp=document.createElement('canvas'); tmp.width=tmp.height=1;
+        const tc=tmp.getContext('2d'); tc.fillStyle=hex; tc.fillRect(0,0,1,1);
+        const d=tc.getImageData(0,0,1,1).data; r=d[0];g=d[1];b=d[2];
+    }
+    r=Math.min(255,Math.max(0,Math.round(r+amt*255)));
+    g=Math.min(255,Math.max(0,Math.round(g+amt*255)));
+    b=Math.min(255,Math.max(0,Math.round(b+amt*255)));
+    return `rgb(${r},${g},${b})`;
+}
+const lighten = (h, a) => shiftColor(h,  a);
+const darken  = (h, a) => shiftColor(h, -a);
+
+// =============================
+// SUN
+// =============================
+function drawSun(t){
+    const c = center();
+    const pulse = 1 + 0.02 * Math.sin(t / 600);
+
+    for(let i = 3; i > 0; i--){
+        const grad = ctx.createRadialGradient(c.x, c.y, 24, c.x, c.y, 40*i*pulse);
+        grad.addColorStop(0, 'rgba(255,200,50,0.15)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 40*i*pulse, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    const sunGrad = ctx.createRadialGradient(c.x-8, c.y-8, 4, c.x, c.y, 28*pulse);
+    sunGrad.addColorStop(0, '#fff8c0');
+    sunGrad.addColorStop(0.4, '#ffcc00');
+    sunGrad.addColorStop(1, '#ff6600');
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 28*pulse, 0, Math.PI*2);
+    ctx.fill();
+}
+
+// =============================
+// PLANETS
+// =============================
+class Planet {
+    constructor(name, orbitFactor, size, color, resource, glowColor){
+        this.name = name;
+        this.orbitFactor = orbitFactor;
+        this.size = size;
+        this.color = color;
+        this.glowColor = glowColor || color;
+        this.resource = resource;
+        this.angle = Math.random() * Math.PI * 2;
+        this.speed = 0.00005 + Math.random() * 0.00003;
+    }
+
+    orbitRadius(){
+        return Math.min(canvas.width, canvas.height) / 2 * this.orbitFactor;
+    }
+
+    update(dt){ this.angle += this.speed * dt; }
+
+    position(){
+        const c = center();
+        const r = this.orbitRadius();
+        return { x: c.x + Math.cos(this.angle)*r, y: c.y + Math.sin(this.angle)*r };
+    }
+
+    draw(t){
+        const p  = this.position();
+        const c  = center();
+        const r  = this.orbitRadius();
+
+        // Orbit ring — thin, independent of zoom
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+        ctx.strokeStyle = "rgba(255,255,255,0.04)";
+        ctx.lineWidth = 1 / camera.zoom;
+        ctx.stroke();
+
+        // Atmosphere glow
+        const pulse = 1 + 0.04 * Math.sin(t / 800);
+        const grad = ctx.createRadialGradient(p.x, p.y, this.size*0.5, p.x, p.y, this.size*3*pulse);
+        grad.addColorStop(0, this.glowColor.replace(')', ',0.2)').replace('rgb','rgba'));
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, this.size*3*pulse, 0, Math.PI*2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Planet body
+        const bg = ctx.createRadialGradient(p.x - this.size*0.3, p.y - this.size*0.3, this.size*0.1, p.x, p.y, this.size);
+        bg.addColorStop(0, lighten(this.color, 0.4));
+        bg.addColorStop(1, darken(this.color, 0.4));
+        ctx.fillStyle = bg;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, this.size, 0, Math.PI*2);
+        ctx.fill();
+
+        // Label — constant screen size regardless of zoom
+        ctx.save();
+        ctx.font = `${9 / camera.zoom}px 'Share Tech Mono'`;
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.textAlign = "center";
+        ctx.fillText(this.name.toUpperCase(), p.x, p.y + this.size + 14 / camera.zoom);
+        ctx.restore();
+    }
+}
+
+// Spread orbits out significantly more than before
+const planets = [
+    new Planet("Oxygen", 0.28, 14, "#00aaff", "oxygen", "#00aaff"),
+    new Planet("Food",   0.46, 15, "#44cc66", "food",   "#44cc66"),
+    new Planet("Water",  0.67, 13, "#2255dd", "water",  "#2255dd"),
+    new Planet("Fuel",   0.90, 17, "#dd8800", "fuel",   "#dd8800"),
+];
+
+// =============================
+// THRUST TRAIL
+// =============================
+class Trail {
+    constructor(){ this.particles = []; }
+
+    emit(x, y, vx, vy, color){
+        for(let i = 0; i < 3; i++){
+            this.particles.push({
+                x, y,
+                vx: vx * -0.08 + (Math.random()-0.5) * 0.8,
+                vy: vy * -0.08 + (Math.random()-0.5) * 0.8,
+                life: 1,
+                decay: 0.025 + Math.random() * 0.02,
+                size: 0.6 + Math.random() * 0.8,
+                color
+            });
+        }
+    }
+
+    update(dt){
+        for(let p of this.particles){
+            p.x += p.vx * dt * 0.1;
+            p.y += p.vy * dt * 0.1;
+            p.life -= p.decay * dt * 0.1;
+        }
+        this.particles = this.particles.filter(p => p.life > 0);
+    }
+
+    draw(){
+        for(let p of this.particles){
+            ctx.globalAlpha = p.life * 0.7;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    }
+}
+
+const trail = new Trail();
+
+// =============================
+// SPAWN BURST
+// =============================
+const spawnParticles = [];
+
+function triggerSpawn(x, y){
+    const colors = ['#ffffff','#00ccff','#88eeff','#ffcc44','#ff8833','#aaffcc'];
+    for(let i = 0; i < 90; i++){
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.5 + Math.random() * 3.5;
+        spawnParticles.push({
+            x, y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1,
+            decay: 0.003 + Math.random() * 0.005,
+            size: 0.8 + Math.random() * 2.5,
+            color: colors[Math.floor(Math.random() * colors.length)]
+        });
+    }
+}
+
+function updateSpawnParticles(dt){
+    for(let p of spawnParticles) {
+        p.x += p.vx * dt * 0.1;
+        p.y += p.vy * dt * 0.1;
+        p.vx *= 0.97;
+        p.vy *= 0.97;
+        p.life -= p.decay * dt * 0.1;
+    }
+    for(let i = spawnParticles.length - 1; i >= 0; i--)
+        if(spawnParticles[i].life <= 0) spawnParticles.splice(i, 1);
+}
+
+function drawSpawnParticles(){
+    for(let p of spawnParticles){
+        if(p.life <= 0) continue;
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+}
+
+// =============================
+// SHIP
+// =============================
+class Ship {
+    constructor(){
+        const c = center();
+        this.x = c.x;
+        this.y = c.y - 200;
+        this.vx = 0;
+        this.vy = 0;
+        this.rotation = 0;
+        this.thrusting = false;
+
+        this.state = "idle";
+        this.target = null;
+        this.landedPlanet = null;
+        this.surfaceAngle = 0;
+
+        this.resources = { oxygen:100, water:100, food:100, fuel:100 };
+        this.evaRefillRate = 0;
+        this.evaResource = null;
+
+        // Spawn
+        this.spawned = false;
+        this.spawnTimer = 0;
+        this.SPAWN_DELAY = 1200;
+
+        // Idle wander
+        this.wanderX = 0;
+        this.wanderY = 0;
+        this._pickWander();
+    }
+
+    _pickWander(){
+        const pad = 280;
+        this.wanderX = pad + Math.random() * (canvas.width  - pad*2);
+        this.wanderY = pad + Math.random() * (canvas.height - pad*2);
+    }
+
+    update(dt){
+        // Spawn countdown — ship waits before appearing
+        if(!this.spawned){
+            this.spawnTimer += dt;
+            if(this.spawnTimer >= this.SPAWN_DELAY){
+                this.spawned = true;
+                triggerSpawn(this.x, this.y);
+            }
+            return;
+        }
+
+        // RESOURCE DRAIN
+        if(this.state === "eva")
+            this.resources.oxygen -= 0.002 * dt;
+
+        this.resources.water -= 0.001 * dt;
+        this.resources.food  -= 0.0006 * dt;
+
+        if(this.state === "transfer" || this.state === "takeoff")
+            this.resources.fuel -= 0.0015 * dt;
+
+        // Gradual EVA refill
+        if(this.state === "eva" && this.evaResource)
+            this.resources[this.evaResource] = Math.min(100,
+                this.resources[this.evaResource] + this.evaRefillRate * dt);
+
+        for(let r in this.resources)
+            this.resources[r] = Math.max(0, this.resources[r]);
+
+        // TRANSFER — slow thrust, always tracking moving target
+        if(this.state === "transfer"){
+ const tp = this.target.position();
+
+const dx = tp.x - this.x;
+const dy = tp.y - this.y;
+const dist = Math.hypot(dx, dy);
+
+const angle = Math.atan2(dy, dx);
+
+// Desired speed increases with distance
+const maxSpeed = 1.4;
+const arriveRadius = 120;
+
+let desiredSpeed = maxSpeed;
+
+if(dist < arriveRadius){
+    desiredSpeed = maxSpeed * (dist / arriveRadius);
+}
+
+// Desired velocity
+const desiredVX = Math.cos(angle) * desiredSpeed;
+const desiredVY = Math.sin(angle) * desiredSpeed;
+
+// Steering force
+const steerStrength = 0.08;
+this.vx += (desiredVX - this.vx) * steerStrength;
+this.vy += (desiredVY - this.vy) * steerStrength;
+
+this.thrusting = dist > this.target.size + 10;
+
+if(this.thrusting){
+    trail.emit(this.x, this.y, this.vx, this.vy, "#88ccff");
+}
+
+// Land when close enough
+if(dist <= this.target.size + 6){
+    this.land();
+}
+        }
+
+
+
+        // LANDED / EVA — stick to planet surface
+        if(this.state === "landed" || this.state === "eva"){
+            const pp = this.landedPlanet.position();
+            this.x = pp.x + Math.cos(this.surfaceAngle) * this.landedPlanet.size;
+            this.y = pp.y + Math.sin(this.surfaceAngle) * this.landedPlanet.size;
+            this.rotation = this.surfaceAngle + Math.PI/2;
+            this.thrusting = false;
+        }
+
+        // TAKEOFF
+        if(this.state === "takeoff"){
+            this.vx += Math.cos(this.surfaceAngle) * 0.00012 * dt;
+            this.vy += Math.sin(this.surfaceAngle) * 0.00012 * dt;
+            this.thrusting = true;
+            trail.emit(this.x, this.y, this.vx, this.vy, "#ffaa44");
+
+            if(this.distanceTo(this.landedPlanet.position()) > this.landedPlanet.size + 120){
+                this.state = "idle";
+                this.landedPlanet = null;
+                this.target = null;
+                this.thrusting = false;
+            }
+        }
+
+        // IDLE WANDER — drift toward a roaming waypoint
+        if(this.state === "idle"){
+            const dx = this.wanderX - this.x;
+            const dy = this.wanderY - this.y;
+            const dist = Math.hypot(dx, dy);
+            if(dist < 30){
+                this._pickWander();
+            } else {
+                const angle = Math.atan2(dy, dx);
+                const thrust = 0.00012;
+                this.vx += Math.cos(angle) * thrust * dt;
+                this.vy += Math.sin(angle) * thrust * dt;
+                // gentle speed cap so it doesn't build up
+                const spd = Math.hypot(this.vx, this.vy);
+                if(spd > 0.18){ this.vx *= 0.18/spd; this.vy *= 0.18/spd; }
+            }
+            this.thrusting = Math.hypot(this.vx, this.vy) > 0.3;
+            if(this.thrusting)
+                trail.emit(this.x, this.y, this.vx, this.vy, "#88ccff");
+        }
+
+        // PHYSICS
+        if(this.state === "transfer" || this.state === "takeoff" || this.state === "idle"){
+            this.x += this.vx * dt * 0.1;
+            this.y += this.vy * dt * 0.1;
+            if(Math.hypot(this.vx, this.vy) > 0.01)
+                this.rotation = Math.atan2(this.vy, this.vx) + Math.PI/2;
+        }
+
+        /* CHANGE #2: repulsion only during idle */
+        // SCREEN BOUNDS — smooth repulsion starts 260px from each edge, cubic falloff
+        if(this.state === "idle"){
+            const repulseZone = 260;
+            const repulseStr  = 0.018;
+            const left   = this.x;
+            const right  = canvas.width  - this.x;
+            const top    = this.y;
+            const bottom = canvas.height - this.y;
+            if(left   < repulseZone) this.vx += repulseStr * dt * Math.pow(1 - left   / repulseZone, 3);
+            if(right  < repulseZone) this.vx -= repulseStr * dt * Math.pow(1 - right  / repulseZone, 3);
+            if(top    < repulseZone) this.vy += repulseStr * dt * Math.pow(1 - top    / repulseZone, 3);
+            if(bottom < repulseZone) this.vy -= repulseStr * dt * Math.pow(1 - bottom / repulseZone, 3);
+        }
+
+        // Global speed cap — kept low enough that repulsion always wins
+        const maxSpd = 1.2;
+        const spd = Math.hypot(this.vx, this.vy);
+        if(spd > maxSpd){ this.vx *= maxSpd/spd; this.vy *= maxSpd/spd; }
+
+        // Hard clamp — absolute last resort, should never visibly trigger
+        const margin = 10;
+        this.x = Math.max(margin, Math.min(canvas.width  - margin, this.x));
+        this.y = Math.max(margin, Math.min(canvas.height - margin, this.y));
+
+        const wpad = 260 + 20;
+        this.wanderX = Math.max(wpad, Math.min(canvas.width  - wpad, this.wanderX));
+        this.wanderY = Math.max(wpad, Math.min(canvas.height - wpad, this.wanderY));
+
+        this.updateHUD();
+    }
+
+    land(){
+        this.state = "landed";
+        this.landedPlanet = this.target;
+
+        const pp = this.landedPlanet.position();
+        this.surfaceAngle = Math.atan2(this.y - pp.y, this.x - pp.x);
+        this.x = pp.x + Math.cos(this.surfaceAngle) * this.landedPlanet.size;
+        this.y = pp.y + Math.sin(this.surfaceAngle) * this.landedPlanet.size;
+        this.vx = 0;
+        this.vy = 0;
+
+        this.evaResource = this.landedPlanet.resource;
+        const deficit = 100 - this.resources[this.evaResource];
+        this.evaRefillRate = deficit / 2000;
+
+        astronaut.deploy(this);
+    }
+
+    distanceTo(p){ return Math.hypot(this.x - p.x, this.y - p.y); }
+
+    updateHUD(){
+        for(let key of ['oxygen','water','food','fuel']){
+            const val = Math.round(this.resources[key]);
+            const bar   = document.getElementById('bar-'+key);
+            const valEl = document.getElementById('val-'+key);
+            const rowEl = document.getElementById('row-'+key);
+            if(bar)   bar.style.width = val + '%';
+            if(valEl) valEl.textContent = val;
+            if(rowEl) rowEl.classList.toggle('critical', val < 15);
+        }
+        const stateEl  = document.getElementById('state-label');
+        const targetEl = document.getElementById('target-label');
+        if(stateEl)  stateEl.textContent  = this.spawned ? this.state.toUpperCase() : 'STANDBY';
+        if(targetEl) targetEl.textContent = this.target ? this.target.name.toUpperCase() : '—';
+    }
+
+    draw(){
+        if(!this.spawned) return;
+
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        ctx.scale(0.2, 0.2);
+
+        // Engine glow
+        if(this.thrusting){
+            const grd = ctx.createRadialGradient(0, 25, 2, 0, 25, 28);
+            grd.addColorStop(0, 'rgba(255,180,60,0.9)');
+            grd.addColorStop(1, 'rgba(255,80,0,0)');
+            ctx.fillStyle = grd;
+            ctx.beginPath();
+            ctx.arc(0, 25, 28, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        // Body
+        ctx.fillStyle = "#dde8f0";
+        ctx.beginPath();
+        ctx.roundRect(-10, -28, 20, 44, 4);
+        ctx.fill();
+
+        // Cockpit
+        ctx.fillStyle = "#00ccff";
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.ellipse(0, -18, 7, 10, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Wings
+        ctx.fillStyle = "#aabbc8";
+        ctx.beginPath();
+        ctx.moveTo(-10, 5); ctx.lineTo(-26, 18); ctx.lineTo(-10, 14);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(10, 5); ctx.lineTo(26, 18); ctx.lineTo(10, 14);
+        ctx.closePath(); ctx.fill();
+
+        // Nozzle
+        ctx.fillStyle = "#778899";
+        ctx.fillRect(-7, 14, 14, 8);
+
+        ctx.restore();
+    }
+}
+
+const ship = new Ship();
+
+// =============================
+// ASTRONAUT
+// =============================
+class Astronaut {
+    constructor(){
+        this.state = "idle";
+        this.planet = null;
+        this.surfaceAngle = 0;
+        this.targetAngle = 0;
+        this.carrying = false;
+    }
+
+    deploy(s){
+        this.planet = s.landedPlanet;
+        this.surfaceAngle = s.surfaceAngle + 0.1;
+        this.targetAngle = this.surfaceAngle + 0.6;
+        this.state = "walking_out";
+        s.state = "eva";
+    }
+
+    update(dt){
+        if(this.state === "idle") return;
+
+        if(Math.abs(this.surfaceAngle - this.targetAngle) < 0.01){
+            if(this.state === "walking_out"){
+                this.carrying = true;
+                this.targetAngle -= 0.6;
+                this.state = "walking_back";
+            } else {
+                this.carrying = false;
+                this.state = "idle";
+                ship.evaResource = null;
+                ship.resources[this.planet.resource] = 100;
+                ship.state = "takeoff";
+            }
+        } else {
+            this.surfaceAngle += (this.targetAngle - this.surfaceAngle) * 0.05;
+        }
+    }
+
+    draw(t){
+        if(this.state === "idle") return;
+
+        const p = this.planet.position();
+
+        const r = this.planet.size + 4;
+
+        const walking = Math.abs(this.surfaceAngle - this.targetAngle) > 0.02;
+        const bob  = walking ? Math.sin(t * 0.015) * 1.2 : 0;
+        const lean = walking ? Math.sin(t * 0.008) * 0.07 : 0;
+
+        const x = p.x + Math.cos(this.surfaceAngle) * r;
+        const y = p.y + Math.sin(this.surfaceAngle) * r;
+        const bobX = -Math.sin(this.surfaceAngle) * bob;
+        const bobY =  Math.cos(this.surfaceAngle) * bob;
+
+        ctx.save();
+        ctx.translate(x + bobX, y + bobY);
+        ctx.rotate(this.surfaceAngle + Math.PI/2 + lean);
+        ctx.scale(0.2, 0.2);
+
+        // Helmet
+        ctx.fillStyle = "rgba(200,230,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(0, -14, 9, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(0,180,255,0.5)";
+        ctx.beginPath();
+        ctx.arc(0, -14, 6, 0, Math.PI*2);
+        ctx.fill();
+
+        // Suit body
+        ctx.fillStyle = "#dde8f0";
+        ctx.fillRect(-6, -5, 12, 16);
+
+        // Legs with step animation
+        if(walking){
+            const step = Math.sin(t * 0.015);
+            ctx.fillStyle = "#aabbc8";
+            ctx.fillRect(-5, 11, 4, 8 + step*3);
+            ctx.fillRect( 1, 11, 4, 8 - step*3);
+        } else {
+            ctx.fillStyle = "#aabbc8";
+            ctx.fillRect(-5, 11, 4, 8);
+            ctx.fillRect( 1, 11, 4, 8);
+        }
+
+        // Resource crate
+        if(this.carrying){
+            ctx.fillStyle = "#cc8800";
+            ctx.fillRect(-7, -26, 14, 10);
+            ctx.fillStyle = "rgba(255,200,0,0.5)";
+            ctx.fillRect(-5, -24, 10, 6);
+        }
+
+        ctx.restore();
+    }
+}
+
+const astronaut = new Astronaut();
+
+// =============================
+// AI
+// =============================
+function chooseNext(){
+    if(!ship.spawned || ship.state !== "idle") return;
+
+    let best = null, bestScore = 0;
+
+    for(let p of planets){
+        const need = 100 - ship.resources[p.resource];
+
+        if(p.resource === "oxygen" && ship.resources.oxygen < 15){
+            best = p; break;
+        }
+
+        let weight = 1;
+        if(p.resource === "oxygen") weight = 3;
+        if(p.resource === "fuel")   weight = 2.5;
+        if(p.resource === "water")  weight = 2;
+
+        const dist = ship.distanceTo(p.position());
+        const distPenalty = Math.max(0.3, 1 - dist / 1500);
+        const score = need * weight * distPenalty;
+        if(score > bestScore){ bestScore = score; best = p; }
+    }
+
+    if(best && (bestScore > 15 || (best.resource === "oxygen" && ship.resources.oxygen < 15))){
+        ship.target = best;
+        ship.state = "transfer";
+    }
+}
+
+// =============================
+// MAIN LOOP
+// =============================
+let last = 0;
+function loop(t){
+    const dt = Math.min(t - last, 50);
+    last = t;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Stars — screen-fixed, no camera transform
+    drawStars(t);
+
+    // World — apply camera
+    ctx.save();
+    applyCamera();
+
+    drawSun(t);
+
+    for(let p of planets){ p.update(dt); p.draw(t); }
+
+    trail.update(dt);
+    trail.draw();
+
+    updateSpawnParticles(dt);
+    drawSpawnParticles();
+
+    ship.update(dt);
+    astronaut.update(dt);
+    chooseNext();
+
+    ship.draw();
+    astronaut.draw(t);
+
+    ctx.restore();
+
+    requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
