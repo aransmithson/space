@@ -549,24 +549,26 @@ class Ship {
             this.vx += (desiredVX - this.vx) * steerStrength;
             this.vy += (desiredVY - this.vy) * steerStrength;
 
-            this.thrusting = dist > this.target.size + 10;
+            const landDist = this.target.size + Ship.LANDING_OFFSET + 2;
+            this.thrusting = dist > landDist + 4;
             if(this.thrusting){
                 trail.emit(this.x, this.y, this.vx, this.vy, "#88ccff");
             }
 
             // Land when close enough
-            if(dist <= this.target.size + 6){
+            if(dist <= landDist){
                 this.land();
             }
         }
 
 
 
-        // LANDED / EVA — stick to planet surface
+        // LANDED / EVA — stick to planet surface, offset so nozzle base touches
         if(this.state === "landed" || this.state === "eva"){
             const pp = this.landedPlanet.position();
-            this.x = pp.x + Math.cos(this.surfaceAngle) * this.landedPlanet.size;
-            this.y = pp.y + Math.sin(this.surfaceAngle) * this.landedPlanet.size;
+            const r = this.landedPlanet.size + Ship.LANDING_OFFSET;
+            this.x = pp.x + Math.cos(this.surfaceAngle) * r;
+            this.y = pp.y + Math.sin(this.surfaceAngle) * r;
             this.rotation = this.surfaceAngle + Math.PI/2;
             this.thrusting = false;
         }
@@ -664,14 +666,19 @@ class Ship {
         this.updateHUD();
     }
 
+    // Half-height of ship in world units: nozzle tip is at local y=+22, scale=0.2 → 4.4px from center
+    // We offset the ship center by this so the nozzle base sits flush on the planet surface.
+    static get LANDING_OFFSET(){ return 4.4; }
+
     land(){
         this.state = "landed";
         this.landedPlanet = this.target;
 
         const pp = this.landedPlanet.position();
         this.surfaceAngle = Math.atan2(this.y - pp.y, this.x - pp.x);
-        this.x = pp.x + Math.cos(this.surfaceAngle) * this.landedPlanet.size;
-        this.y = pp.y + Math.sin(this.surfaceAngle) * this.landedPlanet.size;
+        const r = this.landedPlanet.size + Ship.LANDING_OFFSET;
+        this.x = pp.x + Math.cos(this.surfaceAngle) * r;
+        this.y = pp.y + Math.sin(this.surfaceAngle) * r;
         this.vx = 0;
         this.vy = 0;
 
@@ -755,6 +762,78 @@ class Ship {
 const ship = new Ship();
 
 // =============================
+// PACKAGE
+// =============================
+class Package {
+    constructor(){
+        this.planet = null;
+        this.surfaceAngle = 0;
+        this.visible = false;
+        this.collected = false;
+    }
+
+    spawn(planet, atAngle){
+        this.planet = planet;
+        this.surfaceAngle = atAngle;
+        this.visible = true;
+        this.collected = false;
+    }
+
+    hide(){
+        this.visible = false;
+        this.collected = false;
+        this.planet = null;
+    }
+
+    position(){
+        if(!this.planet) return {x:0, y:0};
+        const pp = this.planet.position();
+        const r = this.planet.size + 2;
+        return {
+            x: pp.x + Math.cos(this.surfaceAngle) * r,
+            y: pp.y + Math.sin(this.surfaceAngle) * r
+        };
+    }
+
+    draw(t){
+        if(!this.visible || this.collected) return;
+        const pos = this.position();
+
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(this.surfaceAngle + Math.PI/2);
+        ctx.scale(0.2, 0.2);
+
+        // Pulsing glow
+        const pulse = 0.5 + 0.5 * Math.sin(t * 0.005);
+        ctx.globalAlpha = 0.3 + 0.2 * pulse;
+        ctx.fillStyle = "#ffcc44";
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Crate body
+        ctx.fillStyle = "#cc8800";
+        ctx.fillRect(-8, -8, 16, 16);
+        // Crate highlight
+        ctx.fillStyle = "rgba(255,200,0,0.5)";
+        ctx.fillRect(-6, -6, 12, 6);
+        // Crate straps
+        ctx.strokeStyle = "#996600";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, -8); ctx.lineTo(0, 8);
+        ctx.moveTo(-8, 0); ctx.lineTo(8, 0);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+}
+
+const pkg = new Package();
+
+// =============================
 // ASTRONAUT
 // =============================
 class Astronaut {
@@ -763,30 +842,44 @@ class Astronaut {
         this.planet = null;
         this.surfaceAngle = 0;
         this.targetAngle = 0;
+        this.shipAngle = 0;   // angle where ship is parked
         this.carrying = false;
     }
 
     deploy(s){
         this.planet = s.landedPlanet;
+        this.shipAngle = s.surfaceAngle;
         this.surfaceAngle = s.surfaceAngle + 0.1;
-        this.targetAngle = this.surfaceAngle + 0.6;
+
+        // Spawn package at a fixed offset from the ship (opposite direction)
+        const pkgAngle = s.surfaceAngle + 0.7;
+        pkg.spawn(this.planet, pkgAngle);
+
+        this.targetAngle = pkgAngle;   // walk toward package
         this.state = "walking_out";
+        this.carrying = false;
         s.state = "eva";
     }
 
     update(dt){
         if(this.state === "idle") return;
 
-        if(Math.abs(this.surfaceAngle - this.targetAngle) < 0.01){
+        const arrived = Math.abs(this.surfaceAngle - this.targetAngle) < 0.015;
+
+        if(arrived){
             if(this.state === "walking_out"){
+                // Pick up the package
                 this.carrying = true;
-                this.targetAngle -= 0.6;
+                pkg.collected = true;
+                // Walk back to ship
+                this.targetAngle = this.shipAngle + 0.1;
                 this.state = "walking_back";
-            } else {
+            } else if(this.state === "walking_back"){
+                // Delivered — trigger refill and takeoff
                 this.carrying = false;
+                pkg.hide();
                 this.state = "idle";
                 ship.evaResource = null;
-                // Resource was filled gradually during EVA; no hard override needed
                 ship.state = "takeoff";
             }
         } else {
@@ -798,7 +891,6 @@ class Astronaut {
         if(this.state === "idle") return;
 
         const p = this.planet.position();
-
         const r = this.planet.size + 4;
 
         const walking = Math.abs(this.surfaceAngle - this.targetAngle) > 0.02;
@@ -841,12 +933,18 @@ class Astronaut {
             ctx.fillRect( 1, 11, 4, 8);
         }
 
-        // Resource crate
+        // Carried package (above head)
         if(this.carrying){
             ctx.fillStyle = "#cc8800";
-            ctx.fillRect(-7, -26, 14, 10);
+            ctx.fillRect(-7, -28, 14, 12);
             ctx.fillStyle = "rgba(255,200,0,0.5)";
-            ctx.fillRect(-5, -24, 10, 6);
+            ctx.fillRect(-5, -26, 10, 6);
+            ctx.strokeStyle = "#996600";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(0, -28); ctx.lineTo(0, -16);
+            ctx.moveTo(-7, -22); ctx.lineTo(7, -22);
+            ctx.stroke();
         }
 
         ctx.restore();
@@ -865,6 +963,8 @@ function chooseNext(){
 
     for(let p of planets){
         const need = 100 - ship.resources[p.resource];
+        // Don't go to a planet if we don't need the resource meaningfully
+        if(need < 10) continue;
 
         if(p.resource === "oxygen" && ship.resources.oxygen < 15){
             best = p; break;
@@ -932,6 +1032,7 @@ function loop(t){
     astronaut.update(dt);
     chooseNext();
 
+    pkg.draw(t);
     ship.draw();
     astronaut.draw(t);
 
