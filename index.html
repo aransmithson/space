@@ -519,10 +519,7 @@ class Ship {
         if(this.state === "transfer" || this.state === "takeoff")
             this.resources.fuel -= 0.0015 * dt;
 
-        // Gradual EVA refill
-        if(this.state === "eva" && this.evaResource)
-            this.resources[this.evaResource] = Math.min(100,
-                this.resources[this.evaResource] + this.evaRefillRate * dt);
+        // Resource refill happens on package delivery (see Astronaut.update)
 
         for(let r in this.resources)
             this.resources[r] = Math.max(0, this.resources[r]);
@@ -683,8 +680,6 @@ class Ship {
         this.vy = 0;
 
         this.evaResource = this.landedPlanet.resource;
-        const deficit = 100 - this.resources[this.evaResource];
-        this.evaRefillRate = deficit / 2000;
 
         astronaut.deploy(this);
     }
@@ -875,10 +870,12 @@ class Astronaut {
                 this.targetAngle = this.shipAngle + 0.1;
                 this.state = "walking_back";
             } else if(this.state === "walking_back"){
-                // Delivered — trigger refill and takeoff
+                // Delivered — fully refill the resource and take off
                 this.carrying = false;
                 pkg.hide();
                 this.state = "idle";
+                if(ship.evaResource)
+                    ship.resources[ship.evaResource] = 100;
                 ship.evaResource = null;
                 ship.state = "takeoff";
             }
