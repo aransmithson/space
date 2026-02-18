@@ -80,7 +80,20 @@ canvas { display:block; }
     pointer-events:none;
     z-index:10;
 }
-#gameover {
+#impact-flash {
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(255,60,60,0.25);
+    pointer-events:none;
+    z-index:50;
+    animation: flash-out 0.4s ease-out forwards;
+}
+@keyframes flash-out {
+    from { opacity:1; }
+    to   { opacity:0; }
+}
+
     display:none;
     position:fixed;
     inset:0;
@@ -142,6 +155,10 @@ canvas { display:block; }
         <div class="res-label"><span>FUEL</span><span id="val-fuel">100</span></div>
         <div class="res-track"><div class="res-fill" id="bar-fuel" style="background:#ffaa00;width:100%"></div></div>
     </div>
+    <div class="res-row" id="row-hull">
+        <div class="res-label"><span>HULL</span><span id="val-hull">100</span></div>
+        <div class="res-track"><div class="res-fill" id="bar-hull" style="background:#ff4466;width:100%"></div></div>
+    </div>
     <div class="status-row">STATE: <span class="status-val" id="state-label">STANDBY</span></div>
     <div class="status-row">TARGET: <span class="status-val" id="target-label">—</span></div>
     <div style="margin-top:12px; pointer-events:auto;">
@@ -163,6 +180,8 @@ canvas { display:block; }
 </div>
 
 <div id="zoom-hint">SCROLL TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
+
+<div id="impact-flash"></div>
 
 <div id="gameover">
     <h1>Mission Failed</h1>
@@ -443,75 +462,44 @@ class Trail {
 const trail = new Trail();
 
 // =============================
-// SPAWN BURST
+// PKG ECHO RINGS
 // =============================
-const spawnParticles = [];
+const pkgEchoRings = [];
 
 function triggerSpawn(x, y){
-    const colors = ['#ffffff','#00ccff','#88eeff','#ffcc44','#ff8833','#aaffcc'];
-
-    for(let i = 0; i < 140; i++){
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 1 + Math.random() * 5;
-
-        spawnParticles.push({
-            x, y,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            life: 1,
-            decay: 0.002 + Math.random() * 0.004,
-            size: 1.2 + Math.random() * 3.5,
-            color: colors[Math.floor(Math.random() * colors.length)]
-        });
-    }
-
-    // Flash ring effect
-    spawnParticles.push({
-        x, y,
-        vx: 0,
-        vy: 0,
-        life: 1,
-        decay: 0.01,
-        size: 40,
-        color: 'rgba(255,255,255,0.5)',
-        ring: true
-    });
+    // Three staggered echo rings
+    pkgEchoRings.push({ x, y, radius: 0, life: 1, delay: 0   });
+    pkgEchoRings.push({ x, y, radius: 0, life: 1, delay: 120 });
+    pkgEchoRings.push({ x, y, radius: 0, life: 1, delay: 240 });
 }
 
-
 function updateSpawnParticles(dt){
-    for(let p of spawnParticles) {
-        p.x += p.vx * dt * 0.1;
-        p.y += p.vy * dt * 0.1;
-        p.vx *= 0.97;
-        p.vy *= 0.97;
-        p.life -= p.decay * dt * 0.1;
+    for(let r of pkgEchoRings){
+        if(r.delay > 0){ r.delay -= dt; continue; }
+        r.radius += 0.12 * dt;
+        r.life   -= 0.0018 * dt;
     }
-    for(let i = spawnParticles.length - 1; i >= 0; i--)
-        if(spawnParticles[i].life <= 0) spawnParticles.splice(i, 1);
+    for(let i = pkgEchoRings.length - 1; i >= 0; i--)
+        if(pkgEchoRings[i].life <= 0) pkgEchoRings.splice(i, 1);
 }
 
 function drawSpawnParticles(){
-    for(let p of spawnParticles){
-        if(p.life <= 0) continue;
-
-        ctx.globalAlpha = p.life;
-
-        if(p.ring){
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = 3 * p.life;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * (1 - p.life) + 10, 0, Math.PI*2);
-            ctx.stroke();
-        } else {
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
-            ctx.fill();
-        }
+    for(let r of pkgEchoRings){
+        if(r.delay > 0 || r.life <= 0) continue;
+        ctx.globalAlpha = r.life * 0.7;
+        ctx.strokeStyle = '#ffdd88';
+        ctx.lineWidth   = 1.5 * r.life;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+        ctx.stroke();
     }
     ctx.globalAlpha = 1;
 }
+
+// =============================
+// IMPACT PARTICLES (asteroid hits)
+// =============================
+const spawnParticles = [];
 
 
 // =============================
@@ -806,7 +794,8 @@ class Ship {
             oxygen: randRange(50, 100),
             water:  randRange(50, 100),
             food:   randRange(50, 100),
-            fuel:   randRange(50, 100)
+            fuel:   randRange(50, 100),
+            hull:   100
         };
         this.evaRefillRate = 0;
         this.evaResource = null;
@@ -1086,7 +1075,7 @@ if(this.state === "loading"){
     // =============================
     // RESOURCE BARS
     // =============================
-    for(let key of ['oxygen','water','food','fuel']){
+    for(let key of ['oxygen','water','food','fuel','hull']){
 
         const val = Math.round(this.resources[key]);
 
@@ -1419,13 +1408,231 @@ function chooseNext(){
 // GAME OVER
 // =============================
 let gameOver = false;
-const RESOURCE_NAMES = { oxygen:'OXYGEN', water:'WATER', food:'FOOD', fuel:'FUEL' };
+const RESOURCE_NAMES = { oxygen:'OXYGEN', water:'WATER', food:'FOOD', fuel:'FUEL', hull:'HULL BREACH' };
 
 function triggerGameOver(resource){
     gameOver = true;
     document.getElementById('gameover-reason').textContent =
-        RESOURCE_NAMES[resource] + ' DEPLETED — CREW LOST';
+        (resource === 'hull' ? 'HULL BREACH — SHIP DESTROYED' : RESOURCE_NAMES[resource] + ' DEPLETED — CREW LOST');
     document.getElementById('gameover').classList.add('active');
+}
+
+// =============================
+// ASTEROIDS
+// =============================
+const impactFlashEl = document.getElementById('impact-flash');
+
+function triggerImpactFlash(){
+    impactFlashEl.style.display = 'block';
+    impactFlashEl.style.animation = 'none';
+    impactFlashEl.offsetHeight; // reflow
+    impactFlashEl.style.animation = 'flash-out 0.4s ease-out forwards';
+}
+
+class Asteroid {
+    constructor(){
+        this.size  = randRange(6, 18);
+        this.rot   = Math.random() * Math.PI * 2;
+        this.rotSpeed = (Math.random() - 0.5) * 0.002;
+        this.hitCooldown = 0;
+        this.vertices = this._makeVerts();
+
+        // Spawn from a random screen edge, with some margin
+        const edge = Math.floor(Math.random() * 4);
+        const pad  = this.size + 10;
+        if(edge === 0){ this.x = Math.random() * canvas.width;  this.y = -pad; }
+        else if(edge === 1){ this.x = canvas.width + pad;  this.y = Math.random() * canvas.height; }
+        else if(edge === 2){ this.x = Math.random() * canvas.width;  this.y = canvas.height + pad; }
+        else { this.x = -pad; this.y = Math.random() * canvas.height; }
+
+        // Aim roughly toward the center with some randomness
+        const c = center();
+        const baseAngle = Math.atan2(c.y - this.y, c.x - this.x);
+        const spread = (Math.random() - 0.5) * 1.2;
+        const speed  = 0.25 + Math.random() * 0.55;
+        this.vx = Math.cos(baseAngle + spread) * speed;
+        this.vy = Math.sin(baseAngle + spread) * speed;
+
+        this.active = true;
+    }
+
+    _makeVerts(){
+        const count = randRange(6, 10);
+        const verts = [];
+        for(let i = 0; i < count; i++){
+            const a   = (i / count) * Math.PI * 2;
+            const jag = 0.55 + Math.random() * 0.45;
+            verts.push({ a, r: this.size * jag });
+        }
+        return verts;
+    }
+
+    update(dt){
+        this.x   += this.vx * dt * 0.1;
+        this.y   += this.vy * dt * 0.1;
+        this.rot += this.rotSpeed * dt;
+        if(this.hitCooldown > 0) this.hitCooldown -= dt;
+
+        // Despawn when far off screen
+        const margin = 300;
+        if(this.x < -margin || this.x > canvas.width + margin ||
+           this.y < -margin || this.y > canvas.height + margin){
+            this.active = false;
+        }
+    }
+
+    draw(t){
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rot);
+
+        // Soft glow
+        const glow = ctx.createRadialGradient(0, 0, this.size * 0.3, 0, 0, this.size * 2.2);
+        glow.addColorStop(0, 'rgba(160,130,100,0.12)');
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size * 2.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Rock body
+        ctx.beginPath();
+        for(let i = 0; i < this.vertices.length; i++){
+            const v  = this.vertices[i];
+            const nx = Math.cos(v.a) * v.r;
+            const ny = Math.sin(v.a) * v.r;
+            if(i === 0) ctx.moveTo(nx, ny);
+            else         ctx.lineTo(nx, ny);
+        }
+        ctx.closePath();
+
+        const rockGrad = ctx.createRadialGradient(-this.size*0.3, -this.size*0.3, 1, 0, 0, this.size);
+        rockGrad.addColorStop(0, '#8a7a6a');
+        rockGrad.addColorStop(1, '#3a3028');
+        ctx.fillStyle = rockGrad;
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(180,160,130,0.4)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+
+        // Crater highlights
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#c0b090';
+        for(let i = 0; i < 2; i++){
+            const cx = (Math.random() - 0.5) * this.size * 0.8;
+            const cy = (Math.random() - 0.5) * this.size * 0.8;
+            ctx.beginPath();
+            ctx.arc(cx, cy, this.size * 0.15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        ctx.restore();
+    }
+}
+
+const asteroids = [];
+let asteroidSpawnTimer = 0;
+let asteroidSpawnInterval = 9000; // ms, will tighten over time
+let asteroidElapsed = 0;
+
+function spawnAsteroid(){
+    asteroids.push(new Asteroid());
+    // Spawn up to 2 at once occasionally for drama
+    if(Math.random() < 0.25) asteroids.push(new Asteroid());
+}
+
+function updateAsteroids(dt){
+    asteroidElapsed += dt;
+    // Gradually increase difficulty: interval shrinks from 9s → 4s over 3 min
+    asteroidSpawnInterval = Math.max(4000, 9000 - asteroidElapsed * 0.028);
+
+    asteroidSpawnTimer += dt;
+    if(asteroidSpawnTimer >= asteroidSpawnInterval){
+        asteroidSpawnTimer = 0;
+        if(ship.spawned && !gameOver) spawnAsteroid();
+    }
+
+    for(let a of asteroids){
+        if(!a.active) continue;
+        a.update(dt);
+
+        // Collision with ship
+        if(ship.spawned && !gameOver && a.hitCooldown <= 0){
+            const dist = Math.hypot(ship.x - a.x, ship.y - a.y);
+            if(dist < a.size + 9){
+                a.hitCooldown = 1500;
+
+                // Hull damage
+                const dmg = 12 + Math.random() * 14;
+                ship.resources.hull = Math.max(0, ship.resources.hull - dmg);
+
+                // Secondary resource damage
+                const res = ['oxygen','water','food','fuel'];
+                const hit = res[Math.floor(Math.random() * res.length)];
+                ship.resources[hit] = Math.max(0, ship.resources[hit] - (6 + Math.random() * 10));
+
+                // Impact particle burst at collision point
+                for(let i = 0; i < 28; i++){
+                    const ang = Math.random() * Math.PI * 2;
+                    const spd = 0.8 + Math.random() * 3.5;
+                    spawnParticles.push({
+                        x: ship.x, y: ship.y,
+                        vx: Math.cos(ang) * spd,
+                        vy: Math.sin(ang) * spd,
+                        life: 1,
+                        decay: 0.004 + Math.random() * 0.006,
+                        size: 0.8 + Math.random() * 2.5,
+                        color: ['#ff6644','#ffaa44','#ff3322','#cccccc','#ff8833'][Math.floor(Math.random()*5)]
+                    });
+                }
+
+                // Screen flash + asteroid bounce
+                triggerImpactFlash();
+                a.vx *= -0.6;
+                a.vy *= -0.6;
+                a.vx += (ship.x - a.x) * -0.02;
+                a.vy += (ship.y - a.y) * -0.02;
+
+                ship.updateHUD();
+            }
+        }
+    }
+
+    // Clean up inactive
+    for(let i = asteroids.length - 1; i >= 0; i--)
+        if(!asteroids[i].active) asteroids.splice(i, 1);
+}
+
+function drawAsteroids(){
+    for(let a of asteroids){
+        if(a.active) a.draw();
+    }
+}
+
+function updateImpactParticles(dt){
+    for(let p of spawnParticles){
+        p.x += p.vx * dt * 0.1;
+        p.y += p.vy * dt * 0.1;
+        p.vx *= 0.97;
+        p.vy *= 0.97;
+        p.life -= p.decay * dt * 0.1;
+    }
+    for(let i = spawnParticles.length - 1; i >= 0; i--)
+        if(spawnParticles[i].life <= 0) spawnParticles.splice(i, 1);
+}
+
+function drawImpactParticles(){
+    for(let p of spawnParticles){
+        if(p.life <= 0) continue;
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 }
 
 // =============================
@@ -1461,16 +1668,21 @@ function loop(t){
     updateSpawnParticles(dt);
     drawSpawnParticles();
 
+    updateImpactParticles(dt);
+    drawImpactParticles();
+
     updateDustParticles(dt);
     drawDustParticles();
 
     ship.update(dt);
     astronaut.update(dt);
     pkg.update(dt);
+    updateAsteroids(dt);
     chooseNext();
 
     // Draw package before ship/astronaut so it's behind them
     pkg.draw(t);
+    drawAsteroids();
     ship.draw();
     astronaut.draw(t);
 
