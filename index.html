@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Orbital Surface Simulation</title>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
 <style>
@@ -72,7 +73,7 @@ canvas { display:block; }
 .status-row .status-val { color:#0af; }
 #zoom-hint {
     position:fixed;
-    bottom:20px;
+    top:20px;
     right:20px;
     font-size:9px;
     letter-spacing:2px;
@@ -168,6 +169,115 @@ canvas { display:block; }
 .dl.skip  { color:#555; }
 .dl.good  { color:#44ff44; }
 #debug-panel.collapsed #debug-log { display:none; }
+#debug-panel.hidden { display:none; }
+
+/* ── Fullscreen death debug overlay ── */
+#debug-overlay {
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.96);
+    z-index:200;
+    flex-direction:column;
+    font-family:'Share Tech Mono', monospace;
+}
+#debug-overlay.active { display:flex; }
+#debug-overlay-header {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:14px 20px;
+    border-bottom:1px solid #1a3a1a;
+    background:rgba(0,30,0,0.8);
+    flex-shrink:0;
+}
+#debug-overlay-title {
+    font-family:'Orbitron', sans-serif;
+    font-size:11px;
+    letter-spacing:4px;
+    color:#3f3;
+    text-transform:uppercase;
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+#debug-overlay-count {
+    font-family:'Share Tech Mono', monospace;
+    font-size:9px;
+    letter-spacing:2px;
+    color:#1a5c1a;
+}
+#debug-overlay-controls {
+    display:flex;
+    gap:10px;
+    align-items:center;
+}
+#debug-overlay-filter {
+    font-family:'Share Tech Mono', monospace;
+    font-size:9px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    background:none;
+    border:1px solid #1a4a1a;
+    color:#2a6a2a;
+    padding:4px 10px;
+    cursor:pointer;
+}
+#debug-overlay-filter.active { color:#3f3; border-color:#3f3; }
+#debug-overlay-close {
+    font-family:'Share Tech Mono', monospace;
+    font-size:11px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    background:none;
+    border:1px solid #ff3344;
+    color:#ff3344;
+    padding:4px 14px;
+    cursor:pointer;
+}
+#debug-overlay-close:hover { background:rgba(255,51,68,0.12); }
+#debug-overlay-log {
+    flex:1;
+    overflow-y:auto;
+    padding:12px 20px;
+    line-height:1.9;
+    font-size:10px;
+}
+#debug-overlay-log::-webkit-scrollbar { width:5px; }
+#debug-overlay-log::-webkit-scrollbar-track { background:transparent; }
+#debug-overlay-log::-webkit-scrollbar-thumb { background:#1a4a1a; border-radius:3px; }
+
+#debug-toggle-btn {
+    position:fixed;
+    bottom:20px;
+    right:20px;
+    font-family:'Share Tech Mono', monospace;
+    font-size:9px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    background:rgba(0,20,0,0.85);
+    border:1px solid #1a5c1a;
+    color:#3f3;
+    padding:6px 10px;
+    cursor:pointer;
+    z-index:25;
+    pointer-events:auto;
+}
+#debug-toggle-btn:hover { background:rgba(0,40,0,0.9); }
+
+#debug-filter-btn {
+    font-family:'Share Tech Mono', monospace;
+    font-size:8px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+    background:none;
+    border:1px solid #1a4a1a;
+    color:#2a6a2a;
+    padding:2px 6px;
+    cursor:pointer;
+    pointer-events:auto;
+}
+#debug-filter-btn.active { color:#3f3; border-color:#3f3; }
 </style>
 </head>
 <body>
@@ -215,19 +325,37 @@ canvas { display:block; }
 
 </div>
 
-<div id="zoom-hint">SCROLL TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
+<div id="zoom-hint">SCROLL/PINCH TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
 
 <div id="debug-panel">
-    <div id="debug-header" onclick="toggleDebug()">
+    <div id="debug-header" onclick="collapseDebug()">
         ◈ AI DEBUG LOG <span id="debug-count">[0]</span>
+        <button id="debug-filter-btn" onclick="event.stopPropagation(); toggleFilter()" title="Filter idle/skip entries">FILTER IDLE</button>
     </div>
     <div id="debug-log"></div>
+</div>
+
+<button id="debug-toggle-btn" onclick="toggleDebug()">◈ DEBUG</button>
+
+<div id="debug-overlay">
+    <div id="debug-overlay-header">
+        <div id="debug-overlay-title">
+            ◈ AI Debug Log — Mission Debrief
+            <span id="debug-overlay-count">[0]</span>
+        </div>
+        <div id="debug-overlay-controls">
+            <button id="debug-overlay-filter" onclick="toggleOverlayFilter()">FILTER IDLE</button>
+            <button id="debug-overlay-close" onclick="closeDebugOverlay()">✕ CLOSE</button>
+        </div>
+    </div>
+    <div id="debug-overlay-log"></div>
 </div>
 
 <div id="gameover">
     <h1>Mission Failed</h1>
     <p id="gameover-reason">Critical resource depleted</p>
     <button onclick="location.reload()">Restart Mission</button>
+    <button onclick="showDebugOnDeath()" style="margin-top:10px; border-color:#3f3; color:#3f3;">View Debug Log</button>
 </div>
 
 <script>
@@ -241,11 +369,59 @@ const MAX_LOG = 200;
 let debugLines = [];
 let debugCount = 0;
 let debugCollapsed = false;
+let debugHidden = true;      // starts hidden
+let debugFilterIdle = false; // filter out 'skip' entries
 
 function toggleDebug(){
+    debugHidden = !debugHidden;
+    document.getElementById("debug-panel").classList.toggle("hidden", debugHidden);
+    document.getElementById("debug-toggle-btn").textContent = debugHidden ? "◈ DEBUG" : "◈ HIDE DEBUG";
+}
+
+function collapseDebug(){
     debugCollapsed = !debugCollapsed;
     document.getElementById("debug-panel").classList.toggle("collapsed", debugCollapsed);
 }
+
+function toggleFilter(){
+    debugFilterIdle = !debugFilterIdle;
+    document.getElementById("debug-filter-btn").classList.toggle("active", debugFilterIdle);
+    renderDebug();
+}
+
+let overlayFilterIdle = true;
+
+function showDebugOnDeath(){
+    overlayFilterIdle = true;
+    document.getElementById("debug-overlay-filter").classList.add("active");
+    renderOverlay();
+    document.getElementById("debug-overlay").classList.add("active");
+}
+
+function closeDebugOverlay(){
+    document.getElementById("debug-overlay").classList.remove("active");
+}
+
+function toggleOverlayFilter(){
+    overlayFilterIdle = !overlayFilterIdle;
+    document.getElementById("debug-overlay-filter").classList.toggle("active", overlayFilterIdle);
+    renderOverlay();
+}
+
+function renderOverlay(){
+    const log = document.getElementById("debug-overlay-log");
+    const lines = overlayFilterIdle
+        ? debugLines.filter(l => l.type !== 'skip')
+        : debugLines;
+    document.getElementById("debug-overlay-count").textContent = `[${lines.length} entries]`;
+    log.innerHTML = lines.map(l =>
+        `<div class="dl ${l.type}">${l.msg}</div>`
+    ).join("");
+    log.scrollTop = log.scrollHeight;
+}
+
+// Start debug panel hidden
+document.getElementById("debug-panel").classList.add("hidden");
 
 function dbg(msg, type="info"){
     const now = (performance.now() / 1000).toFixed(1);
@@ -258,7 +434,10 @@ function dbg(msg, type="info"){
 function renderDebug(){
     const log = document.getElementById("debug-log");
     document.getElementById("debug-count").textContent = `[${debugCount}]`;
-    log.innerHTML = debugLines.map(l =>
+    const lines = debugFilterIdle
+        ? debugLines.filter(l => l.type !== 'skip')
+        : debugLines;
+    log.innerHTML = lines.map(l =>
         `<div class="dl ${l.type}">${l.msg}</div>`
     ).join("");
     log.scrollTop = log.scrollHeight;
@@ -273,6 +452,12 @@ let lastOxyWarn = 0;
 // CAMERA
 // =============================
 const SOLAR_SCALE = 2.5; // multiplier applied to all orbit radii
+
+// Danger radius = 60% of the innermost (Oxygen) orbit, so it always
+// sits well inside that orbit regardless of screen size.
+function sunDangerRadius(){
+    return Math.min(canvas.width, canvas.height) / 2 * 0.22 * SOLAR_SCALE * 0.60;
+}
 
 function overviewZoom(){
     // Zoom level that fits the outermost orbit (factor 0.96) with a 10% margin
@@ -316,6 +501,67 @@ canvas.addEventListener("mousemove", e => {
     camera.panY = panStart.y + (e.clientY - dragStart.y);
 });
 window.addEventListener("mouseup", () => dragging = false);
+
+// =============================
+// TOUCH EVENTS (mobile)
+// =============================
+let touches = {};
+let lastPinchDist = null;
+let touchPanStart = null;
+
+function getTouchDist(t1, t2){
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+}
+function getTouchMid(t1, t2){
+    return { x:(t1.clientX+t2.clientX)/2, y:(t1.clientY+t2.clientY)/2 };
+}
+
+canvas.addEventListener("touchstart", e => {
+    e.preventDefault();
+    if(e.touches.length === 1){
+        // single finger pan
+        lastPinchDist = null;
+        touchPanStart = {
+            tx: e.touches[0].clientX,
+            ty: e.touches[0].clientY,
+            px: camera.panX,
+            py: camera.panY
+        };
+    } else if(e.touches.length === 2){
+        // two finger pinch
+        lastPinchDist = getTouchDist(e.touches[0], e.touches[1]);
+        touchPanStart = null;
+    }
+}, { passive: false });
+
+canvas.addEventListener("touchmove", e => {
+    e.preventDefault();
+    if(camera.follow) return;
+    if(e.touches.length === 1 && touchPanStart){
+        // pan
+        camera.panX = touchPanStart.px + (e.touches[0].clientX - touchPanStart.tx);
+        camera.panY = touchPanStart.py + (e.touches[0].clientY - touchPanStart.ty);
+    } else if(e.touches.length === 2 && lastPinchDist !== null){
+        // pinch zoom
+        const dist = getTouchDist(e.touches[0], e.touches[1]);
+        const f = dist / lastPinchDist;
+        lastPinchDist = dist;
+        const mid = getTouchMid(e.touches[0], e.touches[1]);
+        const mx = mid.x - canvas.width / 2;
+        const my = mid.y - canvas.height / 2;
+        camera.panX = camera.panX * f + mx * (1 - f);
+        camera.panY = camera.panY * f + my * (1 - f);
+        const newZoom = Math.max(0.1, Math.min(14, camera.zoom * f));
+        camera.zoom = newZoom;
+        camera.targetZoom = newZoom;
+    }
+}, { passive: false });
+
+canvas.addEventListener("touchend", e => {
+    e.preventDefault();
+    if(e.touches.length < 2) lastPinchDist = null;
+    if(e.touches.length === 0) touchPanStart = null;
+}, { passive: false });
 
 function applyCamera(){
     ctx.translate(canvas.width/2 + camera.panX, canvas.height/2 + camera.panY);
@@ -419,7 +665,7 @@ function drawSun(t){
     const pulse = 1 + 0.02 * Math.sin(t / 600);
 
     // Danger zone ring — pulsing red warning
-    const dangerRadius = ship.SUN_DANGER_RADIUS || 90;
+    const dangerRadius = sunDangerRadius();
     const dangerPulse = 0.3 + 0.15 * Math.sin(t / 400);
     ctx.beginPath();
     ctx.arc(c.x, c.y, dangerRadius, 0, Math.PI * 2);
@@ -894,6 +1140,7 @@ class Ship {
 
         this.state = "idle";
         this.target = null;
+        this.nextTarget = null;   // pre-planned destination decided during loading
         this.landedPlanet = null;
         this.surfaceAngle = 0;
 
@@ -904,7 +1151,7 @@ class Ship {
             fuel:   randRange(50, 100)
         };
         this.integrity = 100;
-        this.SUN_DANGER_RADIUS = 90; // world-space radius around sun center
+        this.SUN_DANGER_RADIUS = 90; // replaced by sunDangerRadius() below — kept for fallback
         this.evaRefillRate = 0;
         this.evaResource = null;
 
@@ -990,8 +1237,9 @@ class Ship {
         if(this.state !== "landed" && this.state !== "eva" && this.state !== "loading"){
             const c = center();
             const sunDist = Math.hypot(this.x - c.x, this.y - c.y);
-            if(sunDist < this.SUN_DANGER_RADIUS){
-                const intensity = 1 - sunDist / this.SUN_DANGER_RADIUS;
+            const sunDangerR = sunDangerRadius();
+            if(sunDist < sunDangerR){
+                const intensity = 1 - sunDist / sunDangerR;
                 this.integrity = Math.max(0, this.integrity - 0.008 * intensity * dt);
             }
         }
@@ -1063,7 +1311,13 @@ if(this.state === "loading"){
 
     if(progress >= 1){
         this.loadingResource = null;
-        dbg(`⬆ LOADING complete → TAKEOFF (O2=${this.resources.oxygen.toFixed(0)} FUEL=${this.resources.fuel.toFixed(0)})`, "state");
+
+        // Decide next destination now while still on the surface,
+        // resources freshly topped up — best time to score.
+        ship.nextTarget = decideNextTarget(true);
+        const dest = ship.nextTarget ? ship.nextTarget.name.toUpperCase() : "NONE";
+        dbg(`⬆ LOADING complete → TAKEOFF | next=${dest}`, "state");
+
         this.state = "takeoff";
     }
 
@@ -1110,13 +1364,23 @@ if(this.state === "loading"){
             trail.emit(this.x, this.y, this.vx, this.vy, "#ffaa44");
 
             if(this.distanceTo(this.landedPlanet.position()) > this.landedPlanet.size + 120){
-                dbg(`🔄 TAKEOFF complete → IDLE (O2=${this.resources.oxygen.toFixed(0)})`, "state");
-                this.state = "idle";
                 this.landedPlanet = null;
-                this.target = null;
                 this.thrusting = false;
                 this.takeoffTimer = 0;
                 this.takeoffBlastEmitted = false;
+
+                if(this.nextTarget){
+                    // Go directly — no idle drift
+                    dbg(`🚀 TAKEOFF complete → TRANSFER to ${this.nextTarget.name.toUpperCase()}`, "state");
+                    this.target = this.nextTarget;
+                    this.nextTarget = null;
+                    this.state = "transfer";
+                } else {
+                    // Fallback: let chooseNext() pick from idle
+                    dbg(`🔄 TAKEOFF complete → IDLE (no pre-planned target)`, "state");
+                    this.target = null;
+                    this.state = "idle";
+                }
             }
         }
 
@@ -1615,6 +1879,73 @@ const astronaut = new Astronaut();
 // =============================
 // AI
 // =============================
+// ─── AI decision engine ───────────────────────────────────────────────────
+// Scores all planets and returns the best target (or null). Can be called
+// from any ship state so we can pre-plan the next hop during loading.
+function decideNextTarget(verbose){
+    const c = center();
+    const SUN_SAFE_RADIUS = sunDangerRadius() * 1.25;
+
+    let best = null, bestScore = 0;
+
+    if(verbose) dbg(`── AI eval  O2=${ship.resources.oxygen.toFixed(0)} H2O=${ship.resources.water.toFixed(0)} FOOD=${ship.resources.food.toFixed(0)} FUEL=${ship.resources.fuel.toFixed(0)} INT=${ship.integrity.toFixed(0)}`, 'info');
+
+    for(let p of planets){
+        // Don't pick the planet we just loaded from
+        if(p === ship.landedPlanet) continue;
+
+        const pp = p.position();
+        const distToSun = Math.hypot(pp.x - c.x, pp.y - c.y);
+
+        if(distToSun < SUN_SAFE_RADIUS){
+            if(verbose) dbg(`  SKIP ${p.name}: too close to sun (${distToSun.toFixed(0)} < ${SUN_SAFE_RADIUS.toFixed(0)})`, 'skip');
+            continue;
+        }
+
+        if(p.resource === "repair"){
+            if(ship.integrity < 20){
+                if(verbose) dbg(`  EMERGENCY → Repair (integrity ${ship.integrity.toFixed(0)} < 20)`, 'crit');
+                return p;
+            }
+            const intNeed = 100 - ship.integrity;
+            if(intNeed <= 0){
+                if(verbose) dbg(`  SKIP Repair: integrity full`, 'skip');
+                continue;
+            }
+            const dist = ship.distanceTo(pp);
+            const distPenalty = Math.max(0.3, 1 - dist / 1500);
+            const score = intNeed * 3.5 * distPenalty;
+            if(verbose) dbg(`  Repair: need=${intNeed.toFixed(0)} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
+            if(score > bestScore){ bestScore = score; best = p; }
+            continue;
+        }
+
+        const need = 100 - ship.resources[p.resource];
+
+        if(p.resource === "oxygen" && ship.resources.oxygen < 15){
+            if(verbose) dbg(`  EMERGENCY → Oxygen (O2=${ship.resources.oxygen.toFixed(0)} < 15)`, 'crit');
+            return p;
+        }
+
+        const dist = ship.distanceTo(pp);
+        const distPenalty = Math.max(0.3, 1 - dist / 1500);
+        const score = need * distPenalty;
+        if(verbose) dbg(`  ${p.name}: need=${need.toFixed(0)} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
+        if(score > bestScore){ bestScore = score; best = p; }
+    }
+
+    if(best && (bestScore > 15 || (best.resource === "oxygen" && ship.resources.oxygen < 15) || (best.resource === "repair" && ship.integrity < 20))){
+        if(verbose) dbg(`▶ DECISION: GO TO ${best.name.toUpperCase()} (score=${bestScore.toFixed(1)})`, 'good');
+        return best;
+    }
+
+    if(verbose){
+        if(best) dbg(`  No target chosen — bestScore=${bestScore.toFixed(1)} < 15 threshold`, 'warn');
+        else     dbg(`  No valid target found at all`, 'warn');
+    }
+    return null;
+}
+
 function chooseNext(){
     const now = performance.now();
     const shouldLog = (now - lastChooseLog) > CHOOSE_LOG_INTERVAL;
@@ -1632,68 +1963,18 @@ function chooseNext(){
         return;
     }
 
-    const c = center();
-    const SUN_SAFE_RADIUS = 160;
-
-    let best = null, bestScore = 0;
-
-    if(shouldLog) dbg(`── AI eval  O2=${ship.resources.oxygen.toFixed(0)} H2O=${ship.resources.water.toFixed(0)} FOOD=${ship.resources.food.toFixed(0)} FUEL=${ship.resources.fuel.toFixed(0)} INT=${ship.integrity.toFixed(0)}`, 'info');
-
-    for(let p of planets){
-        const pp = p.position();
-        const distToSun = Math.hypot(pp.x - c.x, pp.y - c.y);
-
-        if(distToSun < SUN_SAFE_RADIUS){
-            if(shouldLog) dbg(`  SKIP ${p.name}: too close to sun (${distToSun.toFixed(0)} < ${SUN_SAFE_RADIUS})`, 'skip');
-            continue;
-        }
-
-        if(p.resource === "repair"){
-            if(ship.integrity < 20){
-                if(shouldLog) dbg(`  EMERGENCY → Repair (integrity ${ship.integrity.toFixed(0)} < 20)`, 'crit');
-                best = p; break;
-            }
-            const intNeed = 100 - ship.integrity;
-            if(intNeed <= 0){
-                if(shouldLog) dbg(`  SKIP Repair: integrity full`, 'skip');
-                continue;
-            }
-            const dist = ship.distanceTo(pp);
-            const distPenalty = Math.max(0.3, 1 - dist / 1500);
-            const score = intNeed * 3.5 * distPenalty;
-            if(shouldLog) dbg(`  Repair: need=${intNeed.toFixed(0)} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
-            if(score > bestScore){ bestScore = score; best = p; }
-            continue;
-        }
-
-        const need = 100 - ship.resources[p.resource];
-
-        if(p.resource === "oxygen" && ship.resources.oxygen < 15){
-            if(shouldLog) dbg(`  EMERGENCY → Oxygen (O2=${ship.resources.oxygen.toFixed(0)} < 15)`, 'crit');
-            best = p; break;
-        }
-
-        let weight = 1;
-        if(p.resource === "oxygen") weight = 1;
-        if(p.resource === "fuel")   weight = 1;
-        if(p.resource === "water")  weight = 1;
-
-        const dist = ship.distanceTo(pp);
-        const distPenalty = Math.max(0.3, 1 - dist / 1500);
-        const score = need * weight * distPenalty;
-        if(shouldLog) dbg(`  ${p.name}: need=${need.toFixed(0)} w=${weight} dist=${dist.toFixed(0)} penalty=${distPenalty.toFixed(2)} → score=${score.toFixed(1)}`, 'score');
-        if(score > bestScore){ bestScore = score; best = p; }
-    }
-
-    if(best && (bestScore > 15 || (best.resource === "oxygen" && ship.resources.oxygen < 15) || (best.resource === "repair" && ship.integrity < 20))){
-        dbg(`▶ DECISION: GO TO ${best.name.toUpperCase()} (score=${bestScore.toFixed(1)})`, 'good');
-        ship.target = best;
+    // Idle fallback — nextTarget should already be set from loading phase,
+    // but if not (e.g. initial spawn), decide now.
+    if(ship.nextTarget){
+        dbg(`▶ DEPART (pre-planned): GO TO ${ship.nextTarget.name.toUpperCase()}`, 'good');
+        ship.target = ship.nextTarget;
+        ship.nextTarget = null;
         ship.state = "transfer";
-    } else if(shouldLog){
-        if(best){
-            dbg(`  No target chosen — bestScore=${bestScore.toFixed(1)} < 15 threshold`, 'warn');
-        } else {
-            dbg(`  No valid target found at all`, 'warn');
+    } else {
+        const decided = decideNextTarget(shouldLog);
+        if(decided){
+            ship.target = decided;
+            ship.state = "transfer";
         }
     }
 
