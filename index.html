@@ -450,6 +450,16 @@ function drawSpawnParticles(){
 }
 
 // =============================
+// ANGLE UTILS
+// =============================
+function lerpAngle(current, target, t){
+    let diff = target - current;
+    while(diff >  Math.PI) diff -= Math.PI * 2;
+    while(diff < -Math.PI) diff += Math.PI * 2;
+    return current + diff * t;
+}
+
+// =============================
 // SHIP
 // =============================
 class Ship {
@@ -601,8 +611,25 @@ class Ship {
         if(this.state === "transfer" || this.state === "takeoff" || this.state === "idle"){
             this.x += this.vx * dt * 0.1;
             this.y += this.vy * dt * 0.1;
-            if(Math.hypot(this.vx, this.vy) > 0.01)
-                this.rotation = Math.atan2(this.vy, this.vx) + Math.PI/2;
+            if(Math.hypot(this.vx, this.vy) > 0.01){
+                let targetRotation = Math.atan2(this.vy, this.vx) + Math.PI/2;
+
+                // During transfer, blend toward landing orientation as we approach
+                if(this.state === "transfer" && this.target){
+                    const tp = this.target.position();
+                    const dist = Math.hypot(tp.x - this.x, tp.y - this.y);
+                    const blendStart = 120;
+                    if(dist < blendStart){
+                        const surfAngle = Math.atan2(this.y - tp.y, this.x - tp.x);
+                        const landingRot = surfAngle + Math.PI/2;
+                        const blend = 1 - dist / blendStart;
+                        targetRotation = lerpAngle(targetRotation, landingRot, blend);
+                    }
+                }
+
+                // Smooth rotation — no snap turning
+                this.rotation = lerpAngle(this.rotation, targetRotation, Math.min(1, 0.005 * dt));
+            }
         }
 
         /* CHANGE #2: repulsion only during idle */
