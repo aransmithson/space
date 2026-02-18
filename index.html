@@ -144,6 +144,22 @@ canvas { display:block; }
     </div>
     <div class="status-row">STATE: <span class="status-val" id="state-label">STANDBY</span></div>
     <div class="status-row">TARGET: <span class="status-val" id="target-label">—</span></div>
+    <div style="margin-top:12px; pointer-events:auto;">
+    <button id="follow-btn" style="
+        width:100%;
+        font-family:'Share Tech Mono', monospace;
+        font-size:10px;
+        letter-spacing:2px;
+        text-transform:uppercase;
+        background:none;
+        border:1px solid #0af;
+        color:#0af;
+        padding:6px;
+        cursor:pointer;">
+        Follow Camera: OFF
+    </button>
+</div>
+
 </div>
 
 <div id="zoom-hint">SCROLL TO ZOOM &nbsp;·&nbsp; DRAG TO PAN</div>
@@ -161,7 +177,13 @@ const ctx = canvas.getContext("2d");
 // =============================
 // CAMERA
 // =============================
-const camera = { zoom: 1, panX: 0, panY: 0 };
+const camera = { 
+    zoom: 1, 
+    panX: 0, 
+    panY: 0,
+    follow: false
+};
+
 
 canvas.addEventListener("wheel", e => {
     e.preventDefault();
@@ -180,7 +202,7 @@ canvas.addEventListener("mousedown", e => {
     panStart  = { x: camera.panX, y: camera.panY };
 });
 canvas.addEventListener("mousemove", e => {
-    if(!dragging) return;
+    if(!dragging || camera.follow) return;
     camera.panX = panStart.x + (e.clientX - dragStart.x);
     camera.panY = panStart.y + (e.clientY - dragStart.y);
 });
@@ -191,6 +213,20 @@ function applyCamera(){
     ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-canvas.width/2, -canvas.height/2);
 }
+const followBtn = document.getElementById("follow-btn");
+
+followBtn.addEventListener("click", () => {
+    camera.follow = !camera.follow;
+
+    followBtn.textContent = 
+        "Follow Camera: " + (camera.follow ? "ON" : "OFF");
+
+    if(camera.follow){
+        camera.panX = 0;
+        camera.panY = 0;
+    }
+});
+
 
 // =============================
 // RESIZE + STARS
@@ -217,6 +253,11 @@ window.addEventListener("resize", resize);
 resize();
 
 function center(){ return { x: canvas.width/2, y: canvas.height/2 }; }
+
+function randRange(min, max){
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 
 function drawStars(t){
     for(let s of stars){
@@ -751,13 +792,22 @@ class Ship {
         this.vy = 0;
         this.rotation = 0;
         this.thrusting = false;
+        // Loading phase
+        this.loadingTimer = 0;
+        this.loadingResource = null;
+        this.loadingDuration = 2000; // 2 seconds
 
         this.state = "idle";
         this.target = null;
         this.landedPlanet = null;
         this.surfaceAngle = 0;
 
-        this.resources = { oxygen:100, water:100, food:100, fuel:100 };
+        this.resources = {
+            oxygen: randRange(50, 100),
+            water:  randRange(50, 100),
+            food:   randRange(50, 100),
+            fuel:   randRange(50, 100)
+        };
         this.evaRefillRate = 0;
         this.evaResource = null;
 
@@ -800,8 +850,16 @@ class Ship {
         }
 
         // RESOURCE DRAIN
-        if(this.state === "eva")
-            this.resources.oxygen -= 0.002 * dt;
+        let oxygenDrain = 0.0004; // base drain inside ship
+
+        if(this.state === "eva"){
+            oxygenDrain = 0.0025; // heavy drain outside
+        }
+        else if(this.state === "transfer" || this.state === "takeoff"){
+            oxygenDrain = 0.0007; // slightly higher under thrust
+        }
+
+        this.resources.oxygen -= oxygenDrain * dt;
 
         this.resources.water -= 0.001 * dt;
         this.resources.food  -= 0.0006 * dt;
@@ -809,10 +867,6 @@ class Ship {
         if(this.state === "transfer" || this.state === "takeoff")
             this.resources.fuel -= 0.0015 * dt;
 
-        // Gradual EVA refill
-        if(this.state === "eva" && this.evaResource)
-            this.resources[this.evaResource] = Math.min(100,
-                this.resources[this.evaResource] + this.evaRefillRate * dt);
 
         for(let r in this.resources)
             this.resources[r] = Math.max(0, this.resources[r]);
@@ -847,13 +901,39 @@ class Ship {
         }
 
         // LANDED / EVA — stick to planet surface
-        if(this.state === "landed" || this.state === "eva"){
+        if(this.state === "landed" || this.state === "eva" || this.state === "loading"){
             const pp = this.landedPlanet.position();
             this.x = pp.x + Math.cos(this.surfaceAngle) * this.landedPlanet.size;
             this.y = pp.y + Math.sin(this.surfaceAngle) * this.landedPlanet.size;
             this.rotation = this.surfaceAngle + Math.PI/2;
             this.thrusting = false;
         }
+// =============================
+// LOADING
+// =============================
+if(this.state === "loading"){
+    this.loadingTimer += dt;
+
+    const progress = this.loadingTimer / this.loadingDuration;
+
+    if(this.loadingResource){
+        const type = this.loadingResource;
+
+        // Gradual refill
+        this.resources[type] = Math.min(
+            100,
+            this.resources[type] + 0.05 * dt
+        );
+    }
+
+    if(progress >= 1){
+        this.loadingResource = null;
+        this.state = "takeoff";
+    }
+
+    this.thrusting = false;
+    return;
+}
 
         // TAKEOFF
         if(this.state === "takeoff"){
@@ -1001,21 +1081,61 @@ class Ship {
     distanceTo(p){ return Math.hypot(this.x - p.x, this.y - p.y); }
 
     updateHUD(){
-        for(let key of ['oxygen','water','food','fuel']){
-            const val = Math.round(this.resources[key]);
-            const bar   = document.getElementById('bar-'+key);
-            const valEl = document.getElementById('val-'+key);
-            const rowEl = document.getElementById('row-'+key);
-            if(bar)   bar.style.width = val + '%';
-            if(valEl) valEl.textContent = val;
-            if(rowEl) rowEl.classList.toggle('critical', val < 15);
-            if(val <= 0 && this.spawned && !gameOver) triggerGameOver(key);
-        }
-        const stateEl  = document.getElementById('state-label');
-        const targetEl = document.getElementById('target-label');
-        if(stateEl)  stateEl.textContent  = this.spawned ? this.state.toUpperCase() : 'STANDBY';
-        if(targetEl) targetEl.textContent = this.target ? this.target.name.toUpperCase() : '—';
+
+    // =============================
+    // RESOURCE BARS
+    // =============================
+    for(let key of ['oxygen','water','food','fuel']){
+
+        const val = Math.round(this.resources[key]);
+
+        const bar   = document.getElementById('bar-' + key);
+        const valEl = document.getElementById('val-' + key);
+        const rowEl = document.getElementById('row-' + key);
+
+        if(bar)   bar.style.width = val + '%';
+        if(valEl) valEl.textContent = val;
+
+        if(rowEl)
+            rowEl.classList.toggle('critical', val < 15);
+
+        if(val <= 0 && this.spawned && !gameOver)
+            triggerGameOver(key);
     }
+
+
+    // =============================
+    // STATE LABEL
+    // =============================
+    const stateEl  = document.getElementById('state-label');
+    const targetEl = document.getElementById('target-label');
+
+    if(stateEl){
+        if(!this.spawned){
+            stateEl.textContent = "STANDBY";
+        }
+        else if(this.state === "loading"){
+            const pct = Math.min(
+                100,
+                Math.floor((this.loadingTimer / this.loadingDuration) * 100)
+            );
+            const resName = this.loadingResource
+                ? this.loadingResource.toUpperCase()
+                : "CARGO";
+            stateEl.textContent = "LOADING " + resName + " " + pct + "%";
+        }
+        else{
+            stateEl.textContent = this.state.toUpperCase();
+        }
+    }
+    // =============================
+    // TARGET LABEL
+    // =============================
+    if(targetEl){
+        targetEl.textContent =
+            this.target ? this.target.name.toUpperCase() : "—";
+    }
+}
 
     draw(){
         if(!this.spawned) return;
@@ -1134,25 +1254,17 @@ class Astronaut {
                     this.carrying = true;
                     pkg.dismiss();
 
-                    // ✅ Instant refill to 100
-                    if (this.planet && this.planet.resource) {
-                        const type = this.planet.resource;
-
-                        if (ship.resources.hasOwnProperty(type)) {
-                            ship.resources[type] = 100;
-                        }
-                    }
-
                     this.targetAngle = this.shipAngle;
                     this.state = "walking_back";
 
                 } else if (this.state === "walking_back") {
 
-                    // Back at ship
                     this.carrying = false;
                     this.state = "idle";
-                    ship.evaResource = null;
-                    ship.state = "takeoff";
+
+                    ship.loadingResource = this.planet.resource;
+                    ship.loadingTimer = 0;
+                    ship.state = "loading";
                 }
 
             } else {
@@ -1330,6 +1442,11 @@ function loop(t){
     drawStars(t);
 
     // World — apply camera
+    if(camera.follow && ship.spawned){
+    camera.panX = canvas.width / 2 - ship.x * camera.zoom;
+    camera.panY = canvas.height / 2 - ship.y * camera.zoom;
+}
+
     ctx.save();
     applyCamera();
 
