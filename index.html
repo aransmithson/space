@@ -168,7 +168,6 @@ canvas.addEventListener("wheel", e => {
     const f = e.deltaY < 0 ? 1.12 : 0.89;
     const mx = e.clientX - canvas.width / 2;
     const my = e.clientY - canvas.height / 2;
-    // zoom toward cursor
     camera.panX = camera.panX * f + mx * (1 - f);
     camera.panY = camera.panY * f + my * (1 - f);
     camera.zoom = Math.max(0.2, Math.min(14, camera.zoom * f));
@@ -316,7 +315,7 @@ class Planet {
         const c  = center();
         const r  = this.orbitRadius();
 
-        // Orbit ring — thin, independent of zoom
+        // Orbit ring
         ctx.beginPath();
         ctx.arc(c.x, c.y, r, 0, Math.PI*2);
         ctx.strokeStyle = "rgba(255,255,255,0.04)";
@@ -342,7 +341,7 @@ class Planet {
         ctx.arc(p.x, p.y, this.size, 0, Math.PI*2);
         ctx.fill();
 
-        // Label — constant screen size regardless of zoom
+        // Label
         ctx.save();
         ctx.font = `${9 / camera.zoom}px 'Share Tech Mono'`;
         ctx.fillStyle = "rgba(255,255,255,0.55)";
@@ -352,7 +351,6 @@ class Planet {
     }
 }
 
-// Spread orbits out significantly more than before
 const planets = [
     new Planet("Oxygen", 0.28, 14, "#00aaff", "oxygen", "#00aaff"),
     new Planet("Food",   0.46, 15, "#44cc66", "food",   "#44cc66"),
@@ -410,20 +408,35 @@ const spawnParticles = [];
 
 function triggerSpawn(x, y){
     const colors = ['#ffffff','#00ccff','#88eeff','#ffcc44','#ff8833','#aaffcc'];
-    for(let i = 0; i < 90; i++){
+
+    for(let i = 0; i < 140; i++){
         const angle = Math.random() * Math.PI * 2;
-        const speed = 0.5 + Math.random() * 3.5;
+        const speed = 1 + Math.random() * 5;
+
         spawnParticles.push({
             x, y,
             vx: Math.cos(angle) * speed,
             vy: Math.sin(angle) * speed,
             life: 1,
-            decay: 0.003 + Math.random() * 0.005,
-            size: 0.8 + Math.random() * 2.5,
+            decay: 0.002 + Math.random() * 0.004,
+            size: 1.2 + Math.random() * 3.5,
             color: colors[Math.floor(Math.random() * colors.length)]
         });
     }
+
+    // Flash ring effect
+    spawnParticles.push({
+        x, y,
+        vx: 0,
+        vy: 0,
+        life: 1,
+        decay: 0.01,
+        size: 40,
+        color: 'rgba(255,255,255,0.5)',
+        ring: true
+    });
 }
+
 
 function updateSpawnParticles(dt){
     for(let p of spawnParticles) {
@@ -440,14 +453,274 @@ function updateSpawnParticles(dt){
 function drawSpawnParticles(){
     for(let p of spawnParticles){
         if(p.life <= 0) continue;
+
         ctx.globalAlpha = p.life;
+
+        if(p.ring){
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 3 * p.life;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * (1 - p.life) + 10, 0, Math.PI*2);
+            ctx.stroke();
+        } else {
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+            ctx.fill();
+        }
+    }
+    ctx.globalAlpha = 1;
+}
+
+
+// =============================
+// DUST / PLUME PARTICLE SYSTEM
+// =============================
+const dustParticles = [];
+
+function emitLandingDust(planet, surfaceAngle){
+    const pp = planet.position();
+    const sx = pp.x + Math.cos(surfaceAngle) * planet.size;
+    const sy = pp.y + Math.sin(surfaceAngle) * planet.size;
+
+    const dustColors = [
+        hexToRgba(planet.color, 0.6),
+        hexToRgba(planet.color, 0.3),
+        'rgba(200,200,200,0.4)',
+        'rgba(255,255,255,0.25)',
+        hexToRgba(planet.color, 0.15),
+    ];
+
+    for(let i = 0; i < 45; i++){
+        // Spread dust along the surface tangent (perpendicular to surface normal)
+        const tangent = surfaceAngle + Math.PI / 2;
+        const spread = (Math.random() - 0.5) * 2.2;
+        const outward = 0.3 + Math.random() * 1.8;
+        const vx = Math.cos(surfaceAngle) * outward * 0.4 + Math.cos(tangent) * spread;
+        const vy = Math.sin(surfaceAngle) * outward * 0.4 + Math.sin(tangent) * spread;
+
+        dustParticles.push({
+            x: sx + (Math.random() - 0.5) * 4,
+            y: sy + (Math.random() - 0.5) * 4,
+            vx, vy,
+            life: 1,
+            decay: 0.006 + Math.random() * 0.008,
+            size: 1.0 + Math.random() * 3.5,
+            color: dustColors[Math.floor(Math.random() * dustColors.length)]
+        });
+    }
+}
+
+function emitTakeoffBlast(planet, surfaceAngle){
+    const pp = planet.position();
+    const sx = pp.x + Math.cos(surfaceAngle) * (planet.size + 2);
+    const sy = pp.y + Math.sin(surfaceAngle) * (planet.size + 2);
+
+    // Fiery exhaust colors
+    const fireColors = [
+        'rgba(255,200,60,0.9)',
+        'rgba(255,140,30,0.8)',
+        'rgba(255,80,10,0.7)',
+        'rgba(255,255,200,0.6)',
+        'rgba(255,100,50,0.5)',
+    ];
+
+    // Dust kicked up by takeoff
+    const dustColors = [
+        hexToRgba(planet.color, 0.5),
+        'rgba(200,200,200,0.3)',
+        hexToRgba(planet.color, 0.2),
+    ];
+
+    // Fire blast downward (into planet surface)
+    for(let i = 0; i < 35; i++){
+        const tangent = surfaceAngle + Math.PI / 2;
+        const spread = (Math.random() - 0.5) * 1.5;
+        // Particles go inward (opposite of surface normal) to simulate exhaust hitting ground
+        const inward = -(0.5 + Math.random() * 2.0);
+        const vx = Math.cos(surfaceAngle) * inward * 0.3 + Math.cos(tangent) * spread;
+        const vy = Math.sin(surfaceAngle) * inward * 0.3 + Math.sin(tangent) * spread;
+
+        dustParticles.push({
+            x: sx + (Math.random() - 0.5) * 3,
+            y: sy + (Math.random() - 0.5) * 3,
+            vx, vy,
+            life: 1,
+            decay: 0.008 + Math.random() * 0.012,
+            size: 0.8 + Math.random() * 2.5,
+            color: fireColors[Math.floor(Math.random() * fireColors.length)]
+        });
+    }
+
+    // Surface dust blowing outward along tangent
+    for(let i = 0; i < 30; i++){
+        const tangent = surfaceAngle + Math.PI / 2;
+        const dir = Math.random() > 0.5 ? 1 : -1;
+        const spread = dir * (0.8 + Math.random() * 2.5);
+        const outward = 0.1 + Math.random() * 0.6;
+        const vx = Math.cos(surfaceAngle) * outward + Math.cos(tangent) * spread;
+        const vy = Math.sin(surfaceAngle) * outward + Math.sin(tangent) * spread;
+
+        dustParticles.push({
+            x: sx + (Math.random() - 0.5) * 6,
+            y: sy + (Math.random() - 0.5) * 6,
+            vx, vy,
+            life: 1,
+            decay: 0.004 + Math.random() * 0.006,
+            size: 1.5 + Math.random() * 3.0,
+            color: dustColors[Math.floor(Math.random() * dustColors.length)]
+        });
+    }
+}
+
+function updateDustParticles(dt){
+    for(let p of dustParticles){
+        p.x += p.vx * dt * 0.08;
+        p.y += p.vy * dt * 0.08;
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.life -= p.decay * dt * 0.1;
+    }
+    for(let i = dustParticles.length - 1; i >= 0; i--)
+        if(dustParticles[i].life <= 0) dustParticles.splice(i, 1);
+}
+
+function drawDustParticles(){
+    for(let p of dustParticles){
+        if(p.life <= 0) continue;
+        ctx.globalAlpha = p.life * 0.8;
         ctx.fillStyle = p.color;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+        ctx.arc(p.x, p.y, p.size * (0.4 + p.life * 0.6), 0, Math.PI*2);
         ctx.fill();
     }
     ctx.globalAlpha = 1;
 }
+
+// =============================
+// PACKAGE (spawns on planet)
+// =============================
+class Package {
+    constructor(){
+        this.active = false;
+        this.planet = null;
+        this.surfaceAngle = 0;
+        this.bobPhase = Math.random() * Math.PI * 2;
+        this.spawnAnim = 0; // 0 to 1 pop-in animation
+    }
+
+    spawn(planet, shipSurfaceAngle){
+    this.active = true;
+    this.planet = planet;
+    this.spawnAnim = 0;
+
+    // Fully random angle
+    let angle;
+    let attempts = 0;
+
+    do {
+        angle = Math.random() * Math.PI * 2;
+        attempts++;
+        // Keep trying if too close to landing site
+    } while(
+        attempts < 30 &&
+        Math.abs(angleDiff(angle, shipSurfaceAngle)) < 0.9   // ~50 degrees away
+    );
+
+    this.surfaceAngle = angle;
+
+    // Trigger visible spawn burst on surface
+    const pp = planet.position();
+    const r = planet.size + 6;
+
+    const sx = pp.x + Math.cos(this.surfaceAngle) * r;
+    const sy = pp.y + Math.sin(this.surfaceAngle) * r;
+
+    triggerSpawn(sx, sy);
+}
+
+
+    dismiss(){
+        this.active = false;
+        this.planet = null;
+    }
+
+    update(dt){
+        if(!this.active) return;
+        this.bobPhase += dt * 0.004;
+        if(this.spawnAnim < 1) this.spawnAnim = Math.min(1, this.spawnAnim + dt * 0.004);
+    }
+
+    draw(t){
+        if(!this.active) return;
+
+        const pp = this.planet.position();
+        const r = this.planet.size + 6;
+        const bob = Math.sin(this.bobPhase) * 1.5;
+
+        const x = pp.x + Math.cos(this.surfaceAngle) * (r + bob);
+        const y = pp.y + Math.sin(this.surfaceAngle) * (r + bob);
+
+        // Eased pop-in scale
+        const ease = 1 - Math.pow(1 - this.spawnAnim, 3);
+        const scale = ease * 0.22;
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(this.surfaceAngle + Math.PI / 2);
+        ctx.scale(scale, scale);
+
+        // Glow underneath
+        const glow = ctx.createRadialGradient(0, 0, 2, 0, 0, 30);
+        glow.addColorStop(0, 'rgba(255,220,80,0.4)');
+        glow.addColorStop(1, 'rgba(255,220,80,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crate body
+        ctx.fillStyle = "#cc8800";
+        ctx.strokeStyle = "#aa6600";
+        ctx.lineWidth = 2;
+        if(ctx.roundRect){
+            ctx.beginPath();
+            ctx.roundRect(-12, -20, 24, 22, 3);
+            ctx.fill();
+            ctx.stroke();
+        } else {
+            ctx.fillRect(-12, -20, 24, 22);
+            ctx.strokeRect(-12, -20, 24, 22);
+        }
+
+        // Crate highlight
+        ctx.fillStyle = "rgba(255,200,0,0.5)";
+        ctx.fillRect(-8, -16, 16, 14);
+
+        // Crate cross straps
+        ctx.strokeStyle = "#886600";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-12, -20); ctx.lineTo(12, 2);
+        ctx.moveTo(12, -20); ctx.lineTo(-12, 2);
+        ctx.stroke();
+
+        // Resource icon dot (glowing)
+        const resColors = { oxygen:'#00ccff', water:'#4488ff', food:'#44dd77', fuel:'#ffaa00' };
+        const rc = resColors[this.planet.resource] || '#fff';
+        ctx.fillStyle = rc;
+        ctx.shadowColor = rc;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(0, -9, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.restore();
+    }
+}
+
+const pkg = new Package();
 
 // =============================
 // ANGLE UTILS
@@ -457,6 +730,13 @@ function lerpAngle(current, target, t){
     while(diff >  Math.PI) diff -= Math.PI * 2;
     while(diff < -Math.PI) diff += Math.PI * 2;
     return current + diff * t;
+}
+
+function angleDiff(a, b){
+    let d = b - a;
+    while(d >  Math.PI) d -= Math.PI * 2;
+    while(d < -Math.PI) d += Math.PI * 2;
+    return d;
 }
 
 // =============================
@@ -486,10 +766,20 @@ class Ship {
         this.spawnTimer = 0;
         this.SPAWN_DELAY = 1200;
 
+        // Takeoff effect
+        this.takeoffTimer = 0;
+        this.takeoffBlastEmitted = false;
+
         // Idle wander
         this.wanderX = 0;
         this.wanderY = 0;
         this._pickWander();
+                // Smooth landing
+        this.landingProgress = 0;
+
+        // Prevent repeat planet visits
+        this.lastPlanet = null;
+
     }
 
     _pickWander(){
@@ -499,7 +789,7 @@ class Ship {
     }
 
     update(dt){
-        // Spawn countdown — ship waits before appearing
+        // Spawn countdown
         if(!this.spawned){
             this.spawnTimer += dt;
             if(this.spawnTimer >= this.SPAWN_DELAY){
@@ -535,16 +825,13 @@ class Ship {
             const dist = Math.hypot(dx, dy);
             const angle = Math.atan2(dy, dx);
 
-            // Desired speed increases with distance
             const maxSpeed = 1.4;
             const arriveRadius = 120;
             let desiredSpeed = dist < arriveRadius ? maxSpeed * (dist / arriveRadius) : maxSpeed;
 
-            // Desired velocity
             const desiredVX = Math.cos(angle) * desiredSpeed;
             const desiredVY = Math.sin(angle) * desiredSpeed;
 
-            // Steering force
             const steerStrength = 0.08;
             this.vx += (desiredVX - this.vx) * steerStrength;
             this.vy += (desiredVY - this.vy) * steerStrength;
@@ -554,13 +841,10 @@ class Ship {
                 trail.emit(this.x, this.y, this.vx, this.vy, "#88ccff");
             }
 
-            // Land when close enough
             if(dist <= this.target.size + 6){
                 this.land();
             }
         }
-
-
 
         // LANDED / EVA — stick to planet surface
         if(this.state === "landed" || this.state === "eva"){
@@ -573,6 +857,33 @@ class Ship {
 
         // TAKEOFF
         if(this.state === "takeoff"){
+            this.takeoffTimer += dt;
+
+            // Emit the big takeoff blast once at the start
+            if(!this.takeoffBlastEmitted){
+                this.takeoffBlastEmitted = true;
+                emitTakeoffBlast(this.landedPlanet, this.surfaceAngle);
+            }
+
+            // Continuous exhaust during takeoff
+            if(this.takeoffTimer % 3 < 2){
+                const pp = this.landedPlanet.position();
+                const ex = pp.x + Math.cos(this.surfaceAngle) * (this.landedPlanet.size - 1);
+                const ey = pp.y + Math.sin(this.surfaceAngle) * (this.landedPlanet.size - 1);
+                const tangent = this.surfaceAngle + Math.PI / 2;
+                for(let i = 0; i < 2; i++){
+                    dustParticles.push({
+                        x: this.x, y: this.y,
+                        vx: -Math.cos(this.surfaceAngle) * (0.5 + Math.random() * 1.5) + (Math.random()-0.5)*0.5,
+                        vy: -Math.sin(this.surfaceAngle) * (0.5 + Math.random() * 1.5) + (Math.random()-0.5)*0.5,
+                        life: 1,
+                        decay: 0.012 + Math.random() * 0.015,
+                        size: 0.6 + Math.random() * 1.8,
+                        color: ['rgba(255,180,60,0.8)','rgba(255,100,20,0.6)','rgba(255,220,120,0.7)'][Math.floor(Math.random()*3)]
+                    });
+                }
+            }
+
             this.vx += Math.cos(this.surfaceAngle) * 0.00012 * dt;
             this.vy += Math.sin(this.surfaceAngle) * 0.00012 * dt;
             this.thrusting = true;
@@ -583,10 +894,12 @@ class Ship {
                 this.landedPlanet = null;
                 this.target = null;
                 this.thrusting = false;
+                this.takeoffTimer = 0;
+                this.takeoffBlastEmitted = false;
             }
         }
 
-        // IDLE WANDER — drift toward a roaming waypoint
+        // IDLE WANDER
         if(this.state === "idle"){
             const dx = this.wanderX - this.x;
             const dy = this.wanderY - this.y;
@@ -598,7 +911,6 @@ class Ship {
                 const thrust = 0.00012;
                 this.vx += Math.cos(angle) * thrust * dt;
                 this.vy += Math.sin(angle) * thrust * dt;
-                // gentle speed cap so it doesn't build up
                 const spd = Math.hypot(this.vx, this.vy);
                 if(spd > 0.18){ this.vx *= 0.18/spd; this.vy *= 0.18/spd; }
             }
@@ -614,7 +926,6 @@ class Ship {
             if(Math.hypot(this.vx, this.vy) > 0.01){
                 let targetRotation = Math.atan2(this.vy, this.vx) + Math.PI/2;
 
-                // During transfer, blend toward landing orientation as we approach
                 if(this.state === "transfer" && this.target){
                     const tp = this.target.position();
                     const dist = Math.hypot(tp.x - this.x, tp.y - this.y);
@@ -627,13 +938,11 @@ class Ship {
                     }
                 }
 
-                // Smooth rotation — no snap turning
                 this.rotation = lerpAngle(this.rotation, targetRotation, Math.min(1, 0.005 * dt));
             }
         }
 
-        /* CHANGE #2: repulsion only during idle */
-        // SCREEN BOUNDS — smooth repulsion starts 260px from each edge, cubic falloff
+        // SCREEN BOUNDS repulsion (idle only)
         if(this.state === "idle"){
             const repulseZone = 260;
             const repulseStr  = 0.018;
@@ -647,12 +956,12 @@ class Ship {
             if(bottom < repulseZone) this.vy -= repulseStr * dt * Math.pow(1 - bottom / repulseZone, 3);
         }
 
-        // Global speed cap — matches transfer maxSpeed so the target is reachable
+        // Global speed cap
         const maxSpd = 1.4;
         const spd = Math.hypot(this.vx, this.vy);
         if(spd > maxSpd){ this.vx *= maxSpd/spd; this.vy *= maxSpd/spd; }
 
-        // Hard clamp — absolute last resort, should never visibly trigger
+        // Hard clamp
         const margin = 10;
         this.x = Math.max(margin, Math.min(canvas.width  - margin, this.x));
         this.y = Math.max(margin, Math.min(canvas.height - margin, this.y));
@@ -675,10 +984,17 @@ class Ship {
         this.vx = 0;
         this.vy = 0;
 
+        // Landing dust plume!
+        emitLandingDust(this.landedPlanet, this.surfaceAngle);
+
         this.evaResource = this.landedPlanet.resource;
         const deficit = 100 - this.resources[this.evaResource];
         this.evaRefillRate = deficit / 2000;
 
+        // Spawn a package on the planet
+        pkg.spawn(this.landedPlanet, this.surfaceAngle);
+
+        // Deploy astronaut to walk to the package
         astronaut.deploy(this);
     }
 
@@ -718,6 +1034,27 @@ class Ship {
             ctx.beginPath();
             ctx.arc(0, 25, 28, 0, Math.PI*2);
             ctx.fill();
+
+            // Enhanced flame during takeoff
+            if(this.state === "takeoff"){
+                const flameLen = 35 + Math.sin(Date.now() * 0.02) * 10;
+                const grd2 = ctx.createRadialGradient(0, 30, 3, 0, 30 + flameLen * 0.5, flameLen);
+                grd2.addColorStop(0, 'rgba(255,255,200,0.8)');
+                grd2.addColorStop(0.3, 'rgba(255,160,40,0.6)');
+                grd2.addColorStop(0.6, 'rgba(255,80,10,0.3)');
+                grd2.addColorStop(1, 'rgba(255,40,0,0)');
+                ctx.fillStyle = grd2;
+                ctx.beginPath();
+                ctx.arc(0, 30 + flameLen * 0.3, flameLen, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Inner white-hot core
+                const coreLen = flameLen * 0.4;
+                ctx.fillStyle = 'rgba(255,255,240,0.5)';
+                ctx.beginPath();
+                ctx.ellipse(0, 28, 5, coreLen, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
 
         // Body
@@ -764,44 +1101,80 @@ class Astronaut {
         this.surfaceAngle = 0;
         this.targetAngle = 0;
         this.carrying = false;
+        this.shipAngle = 0; // remember where the ship is
     }
 
     deploy(s){
         this.planet = s.landedPlanet;
-        this.surfaceAngle = s.surfaceAngle + 0.1;
-        this.targetAngle = this.surfaceAngle + 0.6;
+        this.surfaceAngle = s.surfaceAngle + 0.08; // start just beside the ship
+        this.shipAngle = s.surfaceAngle;
+
+        // Walk to the package location
+        if(pkg.active){
+            this.targetAngle = pkg.surfaceAngle;
+        } else {
+            this.targetAngle = this.surfaceAngle + 0.6;
+        }
+
         this.state = "walking_out";
+        this.carrying = false;
         s.state = "eva";
     }
 
     update(dt){
         if(this.state === "idle") return;
 
-        if(Math.abs(this.surfaceAngle - this.targetAngle) < 0.01){
-            if(this.state === "walking_out"){
-                this.carrying = true;
-                this.targetAngle -= 0.6;
-                this.state = "walking_back";
+        // Calculate angle difference properly
+            const diff = angleDiff(this.surfaceAngle, this.targetAngle);
+
+            if (Math.abs(diff) < 0.015) {
+
+                if (this.state === "walking_out") {
+
+                    this.carrying = true;
+                    pkg.dismiss();
+
+                    // ✅ Instant refill to 100
+                    if (this.planet && this.planet.resource) {
+                        const type = this.planet.resource;
+
+                        if (ship.resources.hasOwnProperty(type)) {
+                            ship.resources[type] = 100;
+                        }
+                    }
+
+                    this.targetAngle = this.shipAngle;
+                    this.state = "walking_back";
+
+                } else if (this.state === "walking_back") {
+
+                    // Back at ship
+                    this.carrying = false;
+                    this.state = "idle";
+                    ship.evaResource = null;
+                    ship.state = "takeoff";
+                }
+
             } else {
-                this.carrying = false;
-                this.state = "idle";
-                ship.evaResource = null;
-                // Resource was filled gradually during EVA; no hard override needed
-                ship.state = "takeoff";
+
+                // Slower walking speed
+                const step = angleDiff(this.surfaceAngle, this.targetAngle);
+                const walkSpeed = 0.02;      // slowed
+                const move = Math.sign(step) * Math.min(Math.abs(step), walkSpeed);
+
+                this.surfaceAngle += move * dt * 0.035; // slowed
             }
-        } else {
-            this.surfaceAngle += (this.targetAngle - this.surfaceAngle) * 0.05;
         }
-    }
+
+    
 
     draw(t){
         if(this.state === "idle") return;
 
         const p = this.planet.position();
-
         const r = this.planet.size + 4;
 
-        const walking = Math.abs(this.surfaceAngle - this.targetAngle) > 0.02;
+        const walking = Math.abs(angleDiff(this.surfaceAngle, this.targetAngle)) > 0.02;
         const bob  = walking ? Math.sin(t * 0.015) * 1.2 : 0;
         const lean = walking ? Math.sin(t * 0.008) * 0.07 : 0;
 
@@ -829,24 +1202,66 @@ class Astronaut {
         ctx.fillStyle = "#dde8f0";
         ctx.fillRect(-6, -5, 12, 16);
 
+        // Arms
+        if(this.carrying){
+            // Arms reaching up to hold the crate
+            ctx.fillStyle = "#ccd8e4";
+            ctx.fillRect(-10, -22, 4, 14);
+            ctx.fillRect( 6, -22, 4, 14);
+        } else {
+            // Swinging arms
+            const armSwing = walking ? Math.sin(t * 0.015) * 4 : 0;
+            ctx.fillStyle = "#ccd8e4";
+            ctx.fillRect(-10, -3 + armSwing, 4, 10);
+            ctx.fillRect( 6, -3 - armSwing, 4, 10);
+        }
+
         // Legs with step animation
         if(walking){
             const step = Math.sin(t * 0.015);
             ctx.fillStyle = "#aabbc8";
             ctx.fillRect(-5, 11, 4, 8 + step*3);
             ctx.fillRect( 1, 11, 4, 8 - step*3);
+
+            // Tiny dust puffs at feet
+            if(Math.random() > 0.7){
+                ctx.globalAlpha = 0.2;
+                ctx.fillStyle = "#aaa";
+                ctx.beginPath();
+                ctx.arc(step > 0 ? -3 : 3, 20, 2 + Math.random()*2, 0, Math.PI*2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
         } else {
             ctx.fillStyle = "#aabbc8";
             ctx.fillRect(-5, 11, 4, 8);
             ctx.fillRect( 1, 11, 4, 8);
         }
 
-        // Resource crate
+        // Resource crate above head
         if(this.carrying){
             ctx.fillStyle = "#cc8800";
-            ctx.fillRect(-7, -26, 14, 10);
+            ctx.strokeStyle = "#aa6600";
+            ctx.lineWidth = 1;
+            if(ctx.roundRect){
+                ctx.beginPath();
+                ctx.roundRect(-7, -32, 14, 10, 2);
+                ctx.fill();
+                ctx.stroke();
+            } else {
+                ctx.fillRect(-7, -32, 14, 10);
+                ctx.strokeRect(-7, -32, 14, 10);
+            }
             ctx.fillStyle = "rgba(255,200,0,0.5)";
-            ctx.fillRect(-5, -24, 10, 6);
+            ctx.fillRect(-5, -30, 10, 6);
+
+            // Cross straps on crate
+            ctx.strokeStyle = "#886600";
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(-7, -32); ctx.lineTo(7, -22);
+            ctx.moveTo(7, -32); ctx.lineTo(-7, -22);
+            ctx.stroke();
         }
 
         ctx.restore();
@@ -928,10 +1343,16 @@ function loop(t){
     updateSpawnParticles(dt);
     drawSpawnParticles();
 
+    updateDustParticles(dt);
+    drawDustParticles();
+
     ship.update(dt);
     astronaut.update(dt);
+    pkg.update(dt);
     chooseNext();
 
+    // Draw package before ship/astronaut so it's behind them
+    pkg.draw(t);
     ship.draw();
     astronaut.draw(t);
 
