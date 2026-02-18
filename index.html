@@ -1081,7 +1081,8 @@ if(this.state === "loading"){
                 this.takeoffBlastEmitted = true;
                 emitTakeoffBlast(this.landedPlanet, this.surfaceAngle);
                 // Structural stress from launch
-                this.integrity = Math.max(0, this.integrity - (2 + Math.random() * 4));
+                this.integrity = Math.max(0, this.integrity - (1 + Math.random() * 2));
+
             }
 
             // Continuous exhaust during takeoff
@@ -1196,10 +1197,15 @@ if(this.state === "loading"){
         emitLandingDust(this.landedPlanet, this.surfaceAngle);
 
         // Impact stress — repair planet is a soft dock, others are harder landings
-        const impactDmg = this.landedPlanet.resource === "repair"
-            ? 1 + Math.random() * 2
-            : 3 + Math.random() * 6;
-        this.integrity = Math.max(0, this.integrity - impactDmg);
+const landingSpeed = Math.hypot(this.vx, this.vy);
+
+// Repair planet absorbs most impact
+const impactMultiplier = this.landedPlanet.resource === "repair" ? 1.2 : 3.5;
+
+const impactDmg = landingSpeed * impactMultiplier;
+
+this.integrity = Math.max(0, this.integrity - impactDmg);
+
 
         this.evaResource = this.landedPlanet.resource;
         if(this.evaResource === "repair"){
@@ -1669,8 +1675,8 @@ function chooseNext(){
 
         let weight = 1;
         if(p.resource === "oxygen") weight = 1;
-        if(p.resource === "fuel")   weight = 2.5;
-        if(p.resource === "water")  weight = 2;
+        if(p.resource === "fuel")   weight = 1;
+        if(p.resource === "water")  weight = 1;
 
         const dist = ship.distanceTo(pp);
         const distPenalty = Math.max(0.3, 1 - dist / 1500);
