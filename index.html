@@ -1171,6 +1171,7 @@ class Ship {
         // Takeoff effect
         this.takeoffTimer = 0;
         this.takeoffBlastEmitted = false;
+        this.departureTimer = 0;  // ramps steering strength after takeoff for smooth arc
 
         // Idle wander
         this.wanderX = 0;
@@ -1254,17 +1255,19 @@ class Ship {
 
             const maxSpeed = 1.4;
             const arriveRadius = 120;
-            // Use surface distance (not center distance) so the ship doesn't
-            // slow below the planet's orbital speed and get stuck chasing it
             const surfaceDist = Math.max(0, dist - this.target.size);
             let desiredSpeed = surfaceDist < arriveRadius ? maxSpeed * (surfaceDist / arriveRadius) : maxSpeed;
-            // Minimum speed guarantees we always overtake the moving planet
             desiredSpeed = Math.max(desiredSpeed, 0.55);
 
             const desiredVX = Math.cos(angle) * desiredSpeed;
             const desiredVY = Math.sin(angle) * desiredSpeed;
 
-            const steerStrength = 0.08;
+            // Ramp steering from near-zero to full over 1800ms so the ship
+            // arcs naturally out of takeoff rather than snapping to heading.
+            this.departureTimer = Math.min(this.departureTimer + dt, 1800);
+            const ramp = (this.departureTimer / 1800) ** 2; // ease-in curve
+            const steerStrength = Math.min(1, 0.004 * dt) * (0.05 + 0.95 * ramp);
+
             this.vx += (desiredVX - this.vx) * steerStrength;
             this.vy += (desiredVY - this.vy) * steerStrength;
 
@@ -1375,6 +1378,7 @@ if(this.state === "loading"){
                     this.target = this.nextTarget;
                     this.nextTarget = null;
                     this.state = "transfer";
+                    this.departureTimer = 0;  // start arc ramp
                 } else {
                     // Fallback: let chooseNext() pick from idle
                     dbg(`🔄 TAKEOFF complete → IDLE (no pre-planned target)`, "state");
